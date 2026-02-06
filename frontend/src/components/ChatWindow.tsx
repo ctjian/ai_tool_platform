@@ -250,9 +250,35 @@ function ChatWindow() {
       let assistantMessageId = retryMessageId || ''
       let assistantCreated = !!retryMessageId // 只有重试时才认为已创建（不需要创建新消息）
       let contentBuffer = ''
-      const bufferSize = 2 // 每2个token更新一次UI
-      let tokenCount = 0
       let newContent = '' // 新的回复内容
+      let pendingBuffer = ''
+      let rafId: number | null = null
+      const chunkStep = 6
+      const scheduleFlush = () => {
+        if (rafId !== null) return
+        const tick = () => {
+          rafId = null
+          if (!pendingBuffer) return
+          const chunk = pendingBuffer.slice(0, chunkStep)
+          pendingBuffer = pendingBuffer.slice(chunkStep)
+          setMessages((msgs) => {
+            const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
+            if (msgIdx >= 0) {
+              const updatedMsgs = [...msgs]
+              updatedMsgs[msgIdx] = {
+                ...updatedMsgs[msgIdx],
+                content: updatedMsgs[msgIdx].content + chunk,
+              }
+              return updatedMsgs
+            }
+            return msgs
+          })
+          if (pendingBuffer) {
+            rafId = requestAnimationFrame(tick)
+          }
+        }
+        rafId = requestAnimationFrame(tick)
+      }
       let firstTokenReceived = false // 标记是否接收到第一个token
       if (!retryMessageId) {
         waitingMessageId = `waiting-${Date.now()}`
@@ -279,7 +305,6 @@ function ChatWindow() {
             const token = (data as any).content
             contentBuffer += token
             newContent += token
-            tokenCount++
 
             // 第一次收到内容时，创建或更新助手消息
             if (!assistantCreated) {
@@ -300,7 +325,6 @@ function ChatWindow() {
               assistantCreated = true
               firstTokenReceived = true
               contentBuffer = ''
-              tokenCount = 0
             } else if (!firstTokenReceived && retryMessageId) {
               // 重试时第一次收到token，清空旧内容，只保留新内容
               firstTokenReceived = true
@@ -317,23 +341,10 @@ function ChatWindow() {
                 return msgs
               })
               contentBuffer = ''
-              tokenCount = 0
-            } else if (tokenCount >= bufferSize) {
-              // 缓冲区满了，更新消息
-              setMessages((msgs) => {
-                const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
-                if (msgIdx >= 0) {
-                  const updatedMsgs = [...msgs]
-                  updatedMsgs[msgIdx] = {
-                    ...updatedMsgs[msgIdx],
-                    content: updatedMsgs[msgIdx].content + contentBuffer,
-                  }
-                  return updatedMsgs
-                }
-                return msgs
-              })
-              contentBuffer = ''
-              tokenCount = 0
+            } else {
+              // 追加到待刷新缓冲区，按固定步长匀速输出
+              pendingBuffer += token
+              scheduleFlush()
             }
           }
         } else if (event === 'done') {
@@ -351,6 +362,21 @@ function ChatWindow() {
               }
               return msgs
             })
+          }
+          if (pendingBuffer && assistantCreated) {
+            setMessages((msgs) => {
+              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
+              if (msgIdx >= 0) {
+                const updatedMsgs = [...msgs]
+                updatedMsgs[msgIdx] = {
+                  ...updatedMsgs[msgIdx],
+                  content: updatedMsgs[msgIdx].content + pendingBuffer,
+                }
+                return updatedMsgs
+              }
+              return msgs
+            })
+            pendingBuffer = ''
           }
           
           // 如果后端返回了完整的消息对象（包含retry_versions），用它更新消息
@@ -403,6 +429,21 @@ function ChatWindow() {
               return msgs
             })
           }
+          if (pendingBuffer && assistantCreated) {
+            setMessages((msgs) => {
+              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
+              if (msgIdx >= 0) {
+                const updatedMsgs = [...msgs]
+                updatedMsgs[msgIdx] = {
+                  ...updatedMsgs[msgIdx],
+                  content: updatedMsgs[msgIdx].content + pendingBuffer,
+                }
+                return updatedMsgs
+              }
+              return msgs
+            })
+            pendingBuffer = ''
+          }
           if (waitingMessageId) {
             setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
           }
@@ -411,6 +452,21 @@ function ChatWindow() {
           // 错误事件
           if (data && typeof data === 'object' && 'error' in data) {
             throw new Error((data as any).error)
+          }
+          if (pendingBuffer && assistantCreated) {
+            setMessages((msgs) => {
+              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
+              if (msgIdx >= 0) {
+                const updatedMsgs = [...msgs]
+                updatedMsgs[msgIdx] = {
+                  ...updatedMsgs[msgIdx],
+                  content: updatedMsgs[msgIdx].content + pendingBuffer,
+                }
+                return updatedMsgs
+              }
+              return msgs
+            })
+            pendingBuffer = ''
           }
           if (waitingMessageId) {
             setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))

@@ -174,7 +174,7 @@ function Sidebar({ onPageChange, currentPage = 'chat' }: SidebarProps) {
       <div className="border-b border-gray-200 p-3 space-y-3">
         <div className="flex items-center gap-2">
           <span className="text-2xl">🤖</span>
-          <span className="font-bold">AI工具</span>
+          <span className="font-bold">一站式AI工具平台</span>
         </div>
         <button
           onClick={handleNewChat}
