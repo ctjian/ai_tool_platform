@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { useAppStore } from '../store/app'
 import apiClient from '../api/client'
 import MessageList from './MessageList'
 import ChatInput from './ChatInput'
-import { Plus, Download, Square } from 'lucide-react'
+import { Plus, Download, Square, ChevronDown, Check } from 'lucide-react'
 import { addToast } from './ui'
 
 interface ImageFile {
@@ -35,6 +35,9 @@ function ChatWindow() {
     conversations,
     setConversations,
     apiConfig,
+    availableModels,
+    availableModelGroups,
+    setApiConfig,
     hasBackendApiKey,
     chatLoading,
     setChatLoading,
@@ -45,12 +48,39 @@ function ChatWindow() {
   const [inputValue, setInputValue] = useState('')
   const [images, setImages] = useState<ImageFile[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
+  const [isModelMenuOpen, setIsModelMenuOpen] = useState(false)
+  const [selectedVendor, setSelectedVendor] = useState<string>('')
+  const vendorOffsetPx = useMemo(() => {
+    if (availableModelGroups.length === 0) return 0
+    const idx = Math.max(
+      0,
+      availableModelGroups.findIndex((g) => g.name === selectedVendor)
+    )
+    const itemHeight = 36
+    const listPaddingTop = 8
+    return idx * itemHeight + listPaddingTop
+  }, [availableModelGroups, selectedVendor])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+
+  useEffect(() => {
+    if (availableModelGroups.length === 0) return
+    const storedVendor = localStorage.getItem('selectedModelVendor') || ''
+    const model = apiConfig.model
+    const matched = availableModelGroups.find(g => g.models.includes(model))
+    const initialVendor = matched?.name || storedVendor || availableModelGroups[0]?.name || ''
+    setSelectedVendor(initialVendor)
+  }, [availableModelGroups, apiConfig.model])
+
+  const vendorModels = useMemo(() => {
+    const group = availableModelGroups.find(g => g.name === selectedVendor)
+    return group?.models || []
+  }, [availableModelGroups, selectedVendor])
 
   // 当切换对话时，加载该对话的消息
   useEffect(() => {
@@ -136,6 +166,11 @@ function ChatWindow() {
       addToast('请先配置 API Key', 'warning')
       return
     }
+    // 必须选择模型
+    if (!apiConfig.model) {
+      addToast('请先选择模型', 'warning')
+      return
+    }
 
     // 对于工具对话，需要有currentTool；对于通用对话，则不需要强制要求有currentConversation，因为我们会自动创建
     if (currentTool && !currentConversation) {
@@ -149,6 +184,7 @@ function ChatWindow() {
     const shouldAutoTitle = options?.autoTitle ?? false
     const retryMessageId = options?.retryMessageId
 
+    let waitingMessageId: string | null = null
     try {
       setChatLoading(true)
 
@@ -211,17 +247,31 @@ function ChatWindow() {
       })
 
       // 处理流式SSE响应 - 使用缓冲区减少重新渲染
-      let assistantMessageId = retryMessageId || Date.now().toString()
+      let assistantMessageId = retryMessageId || ''
       let assistantCreated = !!retryMessageId // 只有重试时才认为已创建（不需要创建新消息）
       let contentBuffer = ''
-      const bufferSize = 10 // 每10个token更新一次UI
+      const bufferSize = 2 // 每2个token更新一次UI
       let tokenCount = 0
       let newContent = '' // 新的回复内容
       let firstTokenReceived = false // 标记是否接收到第一个token
+      if (!retryMessageId) {
+        waitingMessageId = `waiting-${Date.now()}`
+        const waitingMessage = {
+          id: waitingMessageId,
+          conversation_id: conversationId,
+          role: 'assistant' as const,
+          content: '__waiting__',
+          created_at: new Date().toISOString(),
+        }
+        setMessages((msgs) => [...(Array.isArray(msgs) ? msgs : []), waitingMessage])
+      }
 
       for await (const { event, data } of apiClient.readStream(response)) {
         if (event === 'start') {
           // 开始事件，包含message_id
+          if (data && typeof data === 'object' && 'message_id' in data) {
+            assistantMessageId = (data as any).message_id || assistantMessageId
+          }
           continue
         } else if (event === 'token') {
           // token 事件 - 来自后端的实际内容
@@ -233,6 +283,9 @@ function ChatWindow() {
 
             // 第一次收到内容时，创建或更新助手消息
             if (!assistantCreated) {
+              if (!assistantMessageId) {
+                assistantMessageId = Date.now().toString()
+              }
               const initialMessage = {
                 id: assistantMessageId,
                 conversation_id: conversationId,
@@ -240,7 +293,10 @@ function ChatWindow() {
                 content: contentBuffer,
                 created_at: new Date().toISOString(),
               }
-              setMessages((msgs) => [...msgs, initialMessage])
+              setMessages((msgs) => {
+                const filtered = waitingMessageId ? msgs.filter(m => m.id !== waitingMessageId) : msgs
+                return [...filtered, initialMessage]
+              })
               assistantCreated = true
               firstTokenReceived = true
               contentBuffer = ''
@@ -311,8 +367,25 @@ function ChatWindow() {
             })
             // 收到完整消息后，默认选中最新版本
             setVersionIndices({ ...versionIndices, [assistantMessageId]: 0 })
+          } else if (assistantMessageId) {
+            // 兜底：确保消息ID正确（避免使用临时ID导致重试记录丢失）
+            setMessages((msgs) => {
+              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
+              if (msgIdx >= 0) return msgs
+              // 如果找不到，尝试用最新一条assistant消息替换ID
+              const lastIdx = [...msgs].reverse().findIndex(m => m.role === 'assistant')
+              if (lastIdx >= 0) {
+                const realIdx = msgs.length - 1 - lastIdx
+                const updatedMsgs = [...msgs]
+                updatedMsgs[realIdx] = { ...updatedMsgs[realIdx], id: assistantMessageId }
+                return updatedMsgs
+              }
+              return msgs
+            })
           }
-          
+          if (waitingMessageId) {
+            setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
+          }
           break
         } else if (event === 'stopped') {
           // 停止事件 - 也需要刷新缓冲区
@@ -330,17 +403,26 @@ function ChatWindow() {
               return msgs
             })
           }
+          if (waitingMessageId) {
+            setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
+          }
           break
         } else if (event === 'error') {
           // 错误事件
           if (data && typeof data === 'object' && 'error' in data) {
             throw new Error((data as any).error)
           }
+          if (waitingMessageId) {
+            setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
+          }
           break
         }
       }
 
       setIsStreaming(false)
+      if (waitingMessageId) {
+        setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
+      }
 
       // 在第一次回复后自动生成标题（重试时不生成）
       if (shouldAutoTitle && conversationId && conversationTitle && !retryMessageId) {
@@ -375,8 +457,26 @@ function ChatWindow() {
             console.error('Failed to generate title:', err)
           })
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to send message:', error)
+      if (waitingMessageId) {
+        setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
+      }
+      const errorText =
+        typeof error?.message === 'string'
+          ? error.message
+          : '发送失败，请重试'
+
+      // 在对话区显示错误作为一条assistant消息
+      const errorMessage = {
+        id: `error-${Date.now()}`,
+        conversation_id: currentConversation?.id || conversationId || '',
+        role: 'assistant' as const,
+        content: `⚠️ ${errorText}`,
+        created_at: new Date().toISOString(),
+      }
+      setMessages((msgs) => [...(Array.isArray(msgs) ? msgs : []), errorMessage])
+
       addToast('发送失败，请重试', 'error')
       setIsStreaming(false) // 确保错误时也停止流式传输状态
     } finally {
@@ -421,6 +521,20 @@ function ChatWindow() {
     // 重试前将版本选择重置为最新
     setVersionIndices({ ...versionIndices, [assistantMessageId]: 0 })
 
+    // 立即显示等待提示，等待流式输出
+    setMessages((msgs) => {
+      const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
+      if (msgIdx >= 0) {
+        const updated = [...msgs]
+        updated[msgIdx] = {
+          ...updated[msgIdx],
+          content: '__waiting__',
+        }
+        return updated
+      }
+      return msgs
+    })
+
     // 发送消息，但标记为重试（会替换而不是新增消息）
     await sendMessageWithPayload(userMsg.content, userMsg.images || [], {
       skipInputReset: true,
@@ -450,6 +564,81 @@ function ChatWindow() {
                 <p className="text-xs text-gray-600">与AI助手直接对话</p>
               </div>
             </>
+          )}
+        </div>
+        <div className="flex-1 flex justify-center">
+          {availableModels.length > 0 ? (
+            <div className="relative inline-block">
+              <button
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-gray-200 bg-gray-50 text-sm text-gray-800 hover:bg-gray-100 transition"
+                onClick={() => setIsModelMenuOpen((v) => !v)}
+              >
+                <span className="text-gray-500">选择模型</span>
+                <span className="text-gray-900 font-medium">{apiConfig.model}</span>
+                <ChevronDown size={16} className="text-gray-500" />
+              </button>
+              {isModelMenuOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setIsModelMenuOpen(false)}
+                  />
+                  <div className="absolute top-full mt-2 z-50">
+                    <div className="relative">
+                      <div className="bg-white border border-gray-200 rounded-lg shadow-lg min-w-44">
+                        {availableModelGroups.length > 0 ? (
+                          availableModelGroups.map((group) => (
+                            <button
+                              key={group.name}
+                              onClick={() => {
+                                setSelectedVendor(group.name)
+                                localStorage.setItem('selectedModelVendor', group.name)
+                              }}
+                              className={`w-full text-left px-4 py-2 text-sm transition flex items-center justify-between ${
+                                selectedVendor === group.name
+                                  ? 'bg-gray-100 text-gray-900'
+                                  : 'text-gray-700 hover:bg-gray-50'
+                              }`}
+                            >
+                              <span>{group.name}</span>
+                              <ChevronDown size={14} className="text-gray-400 rotate-[-90deg]" />
+                            </button>
+                          ))
+                        ) : (
+                          <div className="px-4 py-2 text-sm text-gray-500">无分组</div>
+                        )}
+                      </div>
+                      <div
+                        className="bg-white border border-gray-200 rounded-lg shadow-lg min-w-56 absolute"
+                        style={{ top: vendorOffsetPx, left: 'calc(100% + 8px)' }}
+                      >
+                      {vendorModels.length > 0 ? (
+                        vendorModels.map((m) => (
+                          <button
+                            key={`${selectedVendor}-${m}`}
+                            onClick={() => {
+                              setApiConfig({ model: m })
+                              setIsModelMenuOpen(false)
+                            }}
+                            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition flex items-center gap-2"
+                          >
+                            <span className="flex-1 text-gray-900">{m}</span>
+                            {apiConfig.model === m && <Check size={16} className="text-gray-600" />}
+                          </button>
+                        ))
+                      ) : (
+                        <div className="px-4 py-2 text-sm text-gray-500">请选择厂商</div>
+                      )}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="text-xs text-gray-500">
+              未加载模型列表，请确认后端已重启并配置 `OPENAI_MODELS`
+            </div>
           )}
         </div>
         <div className="flex items-center gap-2">

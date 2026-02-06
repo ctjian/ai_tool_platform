@@ -20,6 +20,8 @@ interface AppState {
   conversations: Conversation[]
   currentConversation: Conversation | null
   messages: Message[]
+  availableModels: string[]
+  availableModelGroups: { name: string; models: string[] }[]
   
   // UI状态
   sidebarOpen: boolean
@@ -37,6 +39,8 @@ interface AppState {
   setConversations: (conversations: Conversation[] | ((prev: Conversation[]) => Conversation[])) => void
   setCurrentConversation: (conversation: Conversation | null) => void
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void
+  setAvailableModels: (models: string[]) => void
+  setAvailableModelGroups: (groups: { name: string; models: string[] }[]) => void
   setSidebarOpen: (open: boolean) => void
   setLoading: (loading: boolean) => void
   setChatLoading: (loading: boolean) => void
@@ -56,6 +60,8 @@ export const useAppStore = create<AppState>((set) => ({
   conversations: [],
   currentConversation: null,
   messages: [],
+  availableModels: [],
+  availableModelGroups: [],
   sidebarOpen: true,
   loading: false,
   chatLoading: false,
@@ -83,6 +89,8 @@ export const useAppStore = create<AppState>((set) => ({
   setMessages: (messages) => set((state) => ({
     messages: typeof messages === 'function' ? messages(state.messages) : messages
   })),
+  setAvailableModels: (models) => set({ availableModels: models }),
+  setAvailableModelGroups: (groups) => set({ availableModelGroups: groups }),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
   setLoading: (loading) => set({ loading }),
   setChatLoading: (loading) => set({ chatLoading: loading }),

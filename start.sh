@@ -42,7 +42,8 @@ echo "API文档: http://localhost:8000/docs"
 echo ""
 
 # 在后台启动后端
-nohup uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 > backend.log 2>&1 &
+mkdir -p logs
+nohup uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 > logs/backend.log 2>&1 &
 BACKEND_PID=$!
 echo "后端PID: $BACKEND_PID"
 
@@ -99,7 +100,7 @@ echo "🎨 前端服务"
 echo "   地址: http://localhost:20102"
 echo ""
 echo "📝 日志文件"
-echo "   后端: backend.log"
+echo "   后端: logs/backend.log"
 echo "   前端: 在终端显示"
 echo ""
 echo "⏹️  停止服务: 按 Ctrl+C"
@@ -108,4 +109,3 @@ echo ""
 
 # 等待进程
 wait
-

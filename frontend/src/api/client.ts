@@ -115,12 +115,30 @@ export const apiClient = {
     api.post(`/chat/stop`, { conversation_id: conversationId }),
   
   // 配置相关
-  getDefaultConfig: () => api.get<{ has_api_key: boolean; base_url: string; model: string }>('/config/default'),
+  getDefaultConfig: () =>
+    api.get<{
+      has_api_key: boolean
+      base_url: string
+      models: string[]
+      model_groups: { name: string; models: string[] }[]
+    }>('/config/default'),
   getConfig: () => api.get<Record<string, any>>('/config'),
   updateConfig: (config: Record<string, any>) =>
     api.put('/config', config),
   testOpenAIConnection: (data: { api_key: string; base_url: string; model: string }) =>
     api.post('/config/test', data),
+
+  // 自定义工具示例
+  runCustomToolDemo: (value: number) =>
+    api.post('/custom-tools/demo', { value }),
+
+  runBibLookup: (payload: {
+    title: string
+    shorten: boolean
+    remove_fields: string[]
+    max_candidates: number
+  }) =>
+    api.post('/custom-tools/bib-lookup', payload),
 }
 
 export default apiClient

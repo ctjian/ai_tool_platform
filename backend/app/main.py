@@ -76,11 +76,12 @@ async def health_check():
 
 
 # 导入并注册路由
-from app.api.v1 import tools, chat, conversations, config
+from app.api.v1 import tools, chat, conversations, config, custom_tools
 app.include_router(tools.router, prefix="/api/v1", tags=["tools"])
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
 app.include_router(conversations.router, prefix="/api/v1", tags=["conversations"])
 app.include_router(config.router, prefix="/api/v1/config", tags=["config"])
+app.include_router(custom_tools.router, prefix="/api/v1/custom-tools", tags=["custom-tools"])
 
 
 if __name__ == "__main__":

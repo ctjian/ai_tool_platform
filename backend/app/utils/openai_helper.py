@@ -144,16 +144,16 @@ async def generate_title_for_conversation(messages: list, api_config=None) -> st
         if isinstance(api_config, dict):
             api_key = api_config.get('api_key')
             base_url = api_config.get('base_url')
-            model = api_config.get('model', settings.OPENAI_MODEL)
+            model = api_config.get('model') or ""
         else:
             api_key = getattr(api_config, 'api_key', None)
             base_url = getattr(api_config, 'base_url', None)
-            model = getattr(api_config, 'model', settings.OPENAI_MODEL)
+            model = getattr(api_config, 'model', "") or ""
     else:
         # 如果没有UI配置，则读取 .env 中的配置
         api_key = settings.OPENAI_API_KEY or None
         base_url = settings.OPENAI_BASE_URL
-        model = settings.OPENAI_MODEL
+        model = ""
     
     if not api_key:
         # 如果没有配置API key，使用用户消息的前10个字作为标题
@@ -168,9 +168,8 @@ async def generate_title_for_conversation(messages: list, api_config=None) -> st
 
 标题:"""
     
-    # 使用提供的模型，或默认的gpt-4o-mini
-    if not api_config:
-        model = "gpt-4o-mini"
+    # 使用标题专用模型（如未设置则回退到当前模型）
+    title_model = settings.TITLE_MODEL or model
     
     client_kwargs = {
         "api_key": api_key,
@@ -184,7 +183,7 @@ async def generate_title_for_conversation(messages: list, api_config=None) -> st
     
     try:
         response = await client.chat.completions.create(
-            model=model,
+            model=title_model,
             messages=[
                 {"role": "user", "content": title_prompt}
             ],

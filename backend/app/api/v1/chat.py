@@ -88,37 +88,10 @@ async def generate_chat_stream(
             {"role": "system", "content": system_prompt}
         ]
         
-        # 添加历史消息（如果是重试，则排除待重试的消息及其之后的消息，只保留用户的最后一条）
+        # 添加历史消息（如果是重试，则排除待重试的消息及其之后的消息）
         if retry_message_id:
             for msg in messages_history:
                 if msg.id == retry_message_id:
-                    # 找到这条消息前最近的用户消息
-                    for prev_msg in reversed(messages_history[:messages_history.index(msg)]):
-                        if prev_msg.role == "user":
-                            if prev_msg.images:
-                                # 用户消息带图片
-                                content_parts = [{"type": "text", "text": prev_msg.content}] if prev_msg.content else []
-                                try:
-                                    images = json.loads(prev_msg.images)
-                                    for img_data in images:
-                                        content_parts.append({
-                                            "type": "image_url",
-                                            "image_url": {
-                                                "url": img_data
-                                            }
-                                        })
-                                except:
-                                    pass
-                                openai_messages.append({
-                                    "role": "user",
-                                    "content": content_parts
-                                })
-                            else:
-                                openai_messages.append({
-                                    "role": "user",
-                                    "content": prev_msg.content
-                                })
-                            break
                     break
                 else:
                     # 在待重试消息之前的消息，添加到对话历史
@@ -175,26 +148,28 @@ async def generate_chat_stream(
                         })
         
         # 添加当前用户消息（支持图片）
-        if user_images and len(user_images) > 0:
-            # 带图片的消息，使用 vision API 格式
-            content_parts = [{"type": "text", "text": user_message}] if user_message else []
-            for img_data in user_images:
-                content_parts.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": img_data
-                    }
+        # 重试时不重复添加当前用户消息，避免重复输入
+        if not retry_message_id:
+            if user_images and len(user_images) > 0:
+                # 带图片的消息，使用 vision API 格式
+                content_parts = [{"type": "text", "text": user_message}] if user_message else []
+                for img_data in user_images:
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": img_data
+                        }
+                    })
+                openai_messages.append({
+                    "role": "user",
+                    "content": content_parts
                 })
-            openai_messages.append({
-                "role": "user",
-                "content": content_parts
-            })
-        else:
-            # 纯文本消息
-            openai_messages.append({
-                "role": "user",
-                "content": user_message
-            })
+            else:
+                # 纯文本消息
+                openai_messages.append({
+                    "role": "user",
+                    "content": user_message
+                })
         
         # 5. 如果不是重试，使用 chat_db 保存用户消息到数据库
         if not retry_message_id:
@@ -210,6 +185,10 @@ async def generate_chat_stream(
         yield f"event: start\ndata: {start_data}\n\n"
         
         # 7. 调用OpenAI流式API
+        if not api_config or not getattr(api_config, "model", None):
+            error_data = json.dumps({"error": "未提供模型，请在前端选择模型"})
+            yield f"event: error\ndata: {error_data}\n\n"
+            return
         full_response = ""
         active_streams[conversation_id] = True
         

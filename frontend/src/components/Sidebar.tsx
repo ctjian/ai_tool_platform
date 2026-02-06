@@ -1,12 +1,12 @@
 import { useAppStore } from '../store/app'
-import { Settings, Compass, Plus, MoreHorizontal, Pencil, Trash2, X } from 'lucide-react'
+import { Settings, Compass, Plus, MoreHorizontal, Pencil, Trash2, X, Wrench } from 'lucide-react'
 import apiClient from '../api/client'
 import { addToast } from './ui'
 import { useState } from 'react'
 
 interface SidebarProps {
-  onPageChange?: (page: 'chat' | 'settings' | 'explorer') => void
-  currentPage?: 'chat' | 'settings' | 'explorer'
+  onPageChange?: (page: 'chat' | 'settings' | 'explorer' | 'custom-tools') => void
+  currentPage?: 'chat' | 'settings' | 'explorer' | 'custom-tools'
 }
 
 // 获取对话分组
@@ -292,7 +292,18 @@ function Sidebar({ onPageChange, currentPage = 'chat' }: SidebarProps) {
           }`}
         >
           <Compass size={16} />
-          工具广场
+          提示词广场
+        </button>
+        <button
+          onClick={() => onPageChange?.('custom-tools')}
+          className={`w-full flex items-center gap-2 px-3 py-2 rounded transition text-sm ${
+            currentPage === 'custom-tools'
+              ? 'bg-gray-200 text-gray-900'
+              : 'text-gray-700 hover:bg-gray-100 active:bg-gray-200'
+          }`}
+        >
+          <Wrench size={16} />
+          自定义工具
         </button>
         <button
           onClick={() => onPageChange?.('settings')}

@@ -32,7 +32,8 @@ async def get_default_config():
     return {
         "has_api_key": bool(settings.OPENAI_API_KEY),
         "base_url": settings.OPENAI_BASE_URL,
-        "model": settings.OPENAI_MODEL,
+        "models": settings.openai_models_list,
+        "model_groups": settings.openai_models_grouped,
     }
 
 
@@ -46,7 +47,7 @@ async def get_config(db: AsyncSession = Depends(get_session)):
         default_config = {
             "api_key": "",
             "base_url": settings.OPENAI_BASE_URL,
-            "model": settings.OPENAI_MODEL,
+            "model": "",
             "temperature": 0.7,
             "max_tokens": 2000,
             "top_p": 1.0,
@@ -82,7 +83,7 @@ async def update_config(
         new_config = {
             "api_key": config_in.api_key or "",
             "base_url": config_in.base_url or settings.OPENAI_BASE_URL,
-            "model": config_in.model or settings.OPENAI_MODEL,
+            "model": config_in.model or "",
             "temperature": config_in.temperature if config_in.temperature is not None else 0.7,
             "max_tokens": config_in.max_tokens or 2000,
             "top_p": config_in.top_p if config_in.top_p is not None else 1.0,

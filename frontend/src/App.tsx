@@ -6,6 +6,7 @@ import ChatWindow from './components/ChatWindow'
 import { ToastContainer } from './components/ui'
 import { SettingsPage } from './pages/SettingsPage'
 import { ToolsExplorer } from './pages/ToolsExplorer'
+import { CustomToolsPage } from './pages/CustomToolsPage'
 
 function App() {
   const { 
@@ -20,9 +21,11 @@ function App() {
     apiConfig,
     setApiConfig,
     setHasBackendApiKey,
+    setAvailableModels,
+    setAvailableModelGroups,
   } = useAppStore()
 
-  const [currentPage, setCurrentPage] = useState<'chat' | 'settings' | 'explorer'>('chat')
+  const [currentPage, setCurrentPage] = useState<'chat' | 'settings' | 'explorer' | 'custom-tools'>('chat')
 
   useEffect(() => {
     const loadInitialData = async () => {
@@ -32,10 +35,25 @@ function App() {
         // 加载后端默认配置
         try {
           const defaultConfigRes = await apiClient.getDefaultConfig()
-          const { has_api_key, base_url, model } = defaultConfigRes.data
+          const { has_api_key, base_url, models, model_groups } = defaultConfigRes.data
           
           // 记录后端是否有 API key
           setHasBackendApiKey(has_api_key)
+
+          if (Array.isArray(model_groups) && model_groups.length > 0) {
+            setAvailableModelGroups(model_groups)
+            const flat = model_groups.flatMap((g: any) => g.models || [])
+            if (flat.length > 0) {
+              setAvailableModels(flat)
+            }
+          } else {
+            setAvailableModelGroups([])
+            if (Array.isArray(models) && models.length > 0) {
+              setAvailableModels(models)
+            } else if (model) {
+              setAvailableModels([model])
+            }
+          }
           
           // 如果前端localStorage没有配置，使用后端默认值
           if (!apiConfig.api_key && has_api_key) {
@@ -44,9 +62,6 @@ function App() {
           }
           if (!localStorage.getItem('apiConfigBaseUrl')) {
             setApiConfig({ base_url })
-          }
-          if (!localStorage.getItem('apiConfigModel')) {
-            setApiConfig({ model })
           }
         } catch (error) {
           console.error('Failed to load default config:', error)
@@ -81,10 +96,10 @@ function App() {
     loadInitialData()
   }, [setCategories, setTools, setConversations, setLoading, setCurrentConversation, setCurrentTool])
 
-  const handlePageChange = (page: 'chat' | 'settings' | 'explorer') => {
+  const handlePageChange = (page: 'chat' | 'settings' | 'explorer' | 'custom-tools') => {
     setCurrentPage(page)
-    // 切换到设置或工具广场时，清除当前工具和对话以显示对应页面
-    if (page === 'settings' || page === 'explorer') {
+    // 切换到设置、提示词广场或自定义工具时，清除当前工具和对话以显示对应页面
+    if (page === 'settings' || page === 'explorer' || page === 'custom-tools') {
       setCurrentTool(null)
       setCurrentConversation(null)
     }
@@ -116,6 +131,14 @@ function App() {
         </div>
       )
     }
+    
+    if (currentPage === 'custom-tools') {
+      return (
+        <div className="flex-1 overflow-y-auto bg-white p-6">
+          <CustomToolsPage />
+        </div>
+      )
+    }
 
     // 默认：显示欢迎页面
     return (
@@ -123,7 +146,7 @@ function App() {
         <div className="text-center">
           <div className="text-6xl mb-4">�</div>
           <h2 className="text-2xl font-bold mb-2">欢迎使用AI工具</h2>
-          <p className="text-gray-600">点击左侧"工具广场"开始探索工具</p>
+          <p className="text-gray-600">点击左侧"提示词广场"开始探索工具</p>
         </div>
       </div>
     )

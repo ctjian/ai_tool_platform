@@ -4,13 +4,12 @@ import apiClient from '../../api/client';
 import { useAppStore } from '../../store/app';
 
 export const APIConfigPage = () => {
-  const { apiKey, setApiKey, setApiConfig } = useAppStore();
-  const [config, setConfig] = useState({
-    api_key: '',
-    base_url: 'https://api.yunwu.ai/v1',
-    model: 'gpt-4o-mini',
-    temperature: 0.7,
-    max_tokens: 2000,
+  const { apiKey, setApiKey, setApiConfig, apiConfig } = useAppStore();
+    const [config, setConfig] = useState({
+      api_key: '',
+      base_url: 'https://api.yunwu.ai/v1',
+      temperature: 0.7,
+      max_tokens: 2000,
     top_p: 1.0,
     frequency_penalty: 0.0,
     presence_penalty: 0.0,
@@ -38,7 +37,6 @@ export const APIConfigPage = () => {
       setConfig({
         api_key: effectiveKey,
         base_url: serverConfig.base_url || 'https://api.yunwu.ai/v1',
-        model: serverConfig.model || 'gpt-4o-mini',
         temperature: serverConfig.temperature ?? 0.7,
         max_tokens: serverConfig.max_tokens ?? 2000,
         top_p: serverConfig.top_p ?? 1.0,
@@ -54,7 +52,6 @@ export const APIConfigPage = () => {
       setApiConfig({
         api_key: effectiveKey,
         base_url: serverConfig.base_url || 'https://api.yunwu.ai/v1',
-        model: serverConfig.model || 'gpt-4o-mini',
         temperature: serverConfig.temperature ?? 0.7,
         max_tokens: serverConfig.max_tokens ?? 2000,
         top_p: serverConfig.top_p ?? 1.0,
@@ -86,7 +83,6 @@ export const APIConfigPage = () => {
     try {
       const payload: Record<string, any> = {
         base_url: config.base_url,
-        model: config.model,
         temperature: config.temperature,
         max_tokens: config.max_tokens,
         top_p: config.top_p,
@@ -109,7 +105,6 @@ export const APIConfigPage = () => {
       setApiConfig({
         api_key: config.api_key,
         base_url: config.base_url,
-        model: config.model,
         temperature: config.temperature,
         max_tokens: config.max_tokens,
         top_p: config.top_p,
@@ -134,7 +129,7 @@ export const APIConfigPage = () => {
       const response = await apiClient.testOpenAIConnection({
         api_key: keyToTest,
         base_url: config.base_url,
-        model: config.model,
+        model: apiConfig.model,
       });
       
       // 检查响应的 success 字段
@@ -181,12 +176,6 @@ export const APIConfigPage = () => {
             placeholder="https://api.yunwu.ai/v1"
           />
 
-          <Input
-            label="Model"
-            value={config.model}
-            onChange={(e) => handleChange('model', e.target.value)}
-            placeholder="gpt-4o-mini"
-          />
         </CardContent>
       </Card>
 

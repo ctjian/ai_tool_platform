@@ -3,7 +3,7 @@ import { Message } from '../types/api'
 import { useAppStore } from '../store/app'
 import ReactMarkdown from 'react-markdown'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { dracula } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import a11yOneLight from 'react-syntax-highlighter/dist/esm/styles/prism/a11y-one-light'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
@@ -22,11 +22,28 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     const [previewImage, setPreviewImage] = useState<string | null>(null)
     const { versionIndices, setVersionIndices } = useAppStore()
 
-    const handleCopy = (content: string, msgId: string) => {
-      navigator.clipboard.writeText(content)
-      setCopiedId(msgId)
-      addToast('已复制到剪贴板', 'success')
-      setTimeout(() => setCopiedId(null), 2000)
+    const handleCopy = async (content: string, msgId: string) => {
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(content)
+        } else {
+          // fallback for non-secure context
+          const textarea = document.createElement('textarea')
+          textarea.value = content
+          textarea.setAttribute('readonly', '')
+          textarea.style.position = 'fixed'
+          textarea.style.top = '-9999px'
+          document.body.appendChild(textarea)
+          textarea.select()
+          document.execCommand('copy')
+          document.body.removeChild(textarea)
+        }
+        setCopiedId(msgId)
+        addToast('已复制到剪贴板', 'success')
+        setTimeout(() => setCopiedId(null), 2000)
+      } catch (e) {
+        addToast('复制失败，请手动复制', 'error')
+      }
     }
 
     // 将 \(...\) 转换为 $...$ 和 \[...\] 转换为 $$...$$
@@ -119,14 +136,34 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
       code: ({ inline, className, children, ...props }: any) => {
         const match = /language-(\w+)/.exec(className || '')
         return !inline && match ? (
-          <SyntaxHighlighter
-            style={dracula}
-            language={match[1]}
-            PreTag="div"
-            {...props}
-          >
-            {String(children).replace(/\n$/, '')}
-          </SyntaxHighlighter>
+          <div className="my-3 rounded-2xl bg-gray-50 border border-gray-200 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-2 text-xs text-gray-500">
+              <span>{match[1]}</span>
+              <button
+                onClick={() => handleCopy(String(children).replace(/\n$/, ''), `code-${Date.now()}`)}
+                className="flex items-center gap-1 text-gray-500 hover:text-gray-700"
+              >
+                <Copy size={14} />
+                复制代码
+              </button>
+            </div>
+            <div className="px-4 pb-4">
+              <SyntaxHighlighter
+                style={a11yOneLight}
+                language={match[1]}
+                PreTag="div"
+                codeTagProps={{ style: { background: 'transparent' } }}
+                customStyle={{
+                  background: 'transparent',
+                  margin: 0,
+                  padding: 0,
+                }}
+                {...props}
+              >
+                {String(children).replace(/\n$/, '')}
+              </SyntaxHighlighter>
+            </div>
+          </div>
         ) : (
           <code
             className="bg-gray-100 px-1.5 py-0.5 rounded text-red-600 font-mono text-sm"
@@ -136,6 +173,28 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
           </code>
         )
       },
+      table: ({ children }: any) => (
+        <div className="my-3 overflow-x-auto">
+          <table className="min-w-full border border-gray-200 rounded-lg overflow-hidden text-sm">
+            {children}
+          </table>
+        </div>
+      ),
+      thead: ({ children }: any) => (
+        <thead className="bg-gray-50 text-gray-700">{children}</thead>
+      ),
+      tbody: ({ children }: any) => (
+        <tbody className="divide-y divide-gray-200">{children}</tbody>
+      ),
+      tr: ({ children }: any) => (
+        <tr className="hover:bg-gray-50">{children}</tr>
+      ),
+      th: ({ children }: any) => (
+        <th className="text-left font-semibold px-4 py-2 border-b border-gray-200">{children}</th>
+      ),
+      td: ({ children }: any) => (
+        <td className="px-4 py-2 border-b border-gray-200 text-gray-800">{children}</td>
+      ),
     }
 
     return (
@@ -148,6 +207,7 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
                 ? (currentVersionIndex === 0 ? totalVersions : currentVersionIndex)
                 : 0
               const displayContent = getMessageContent(msg)
+              const isWaiting = msg.role === 'assistant' && displayContent === '__waiting__'
               
               return (
               <div key={msg.id} className="flex flex-col">
@@ -181,16 +241,22 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
                     </div>
                   </div>
                 ) : (
-                  <div className="flex justify-start">
+                    <div className="flex justify-start">
                     <div className="max-w-full group relative">
                       <div className="text-gray-800">
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm, remarkMath]}
-                          rehypePlugins={[rehypeKatex]}
-                          components={markdownComponents}
-                        >
-                          {convertLatexDelimiters(displayContent)}
-                        </ReactMarkdown>
+                        {isWaiting ? (
+                          <div className="dot-pulse text-gray-400 text-lg">
+                            <span>.</span><span>.</span><span>.</span>
+                          </div>
+                        ) : (
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm, remarkMath]}
+                            rehypePlugins={[rehypeKatex]}
+                            components={markdownComponents}
+                          >
+                            {convertLatexDelimiters(displayContent)}
+                          </ReactMarkdown>
+                        )}
                       </div>
                       <div className="mt-2 flex items-center gap-2 text-xs text-gray-500">
                         {/* 版本选择器 */}
@@ -231,7 +297,6 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
                           ) : (
                             <Copy size={14} className="text-gray-600" />
                           )}
-                          复制
                         </button>
                         <button
                           onClick={() => onRetry?.(msg.id)}
@@ -239,7 +304,6 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
                           title="重试"
                         >
                           <RotateCcw size={14} className="text-gray-600" />
-                          重试
                         </button>
                       </div>
                     </div>
