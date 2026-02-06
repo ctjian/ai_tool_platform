@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional, Dict, Any
 import json
 
-from app.database import get_session
+from app.database import get_session, get_chat_session
 from app.crud.conversation import conversation_crud, message_crud
 from app.crud.tool import tool_crud
 from app.schemas.conversation import (
@@ -24,7 +24,7 @@ router = APIRouter()
 @router.get("/conversations", response_model=ConversationListResponse)
 async def get_conversations(
     tool_id: str = None,
-    db: AsyncSession = Depends(get_session)
+    db: AsyncSession = Depends(get_chat_session)
 ):
     """获取会话列表，如果指定tool_id则获取该工具的会话，否则获取全部会话"""
     if tool_id:
@@ -53,7 +53,7 @@ async def get_conversations(
 @router.get("/conversations/{conversation_id}", response_model=ConversationDetailResponse)
 async def get_conversation(
     conversation_id: str,
-    db: AsyncSession = Depends(get_session)
+    db: AsyncSession = Depends(get_chat_session)
 ):
     """获取会话详情（包含消息）"""
     conversation = await conversation_crud.get(db, conversation_id, with_messages=True)
@@ -106,16 +106,18 @@ async def get_conversation(
 @router.post("/conversations", response_model=ConversationResponse, status_code=201)
 async def create_conversation(
     conversation_in: ConversationCreate,
-    db: AsyncSession = Depends(get_session)
+    chat_db: AsyncSession = Depends(get_chat_session),
+    tools_db: AsyncSession = Depends(get_session)
 ):
     """创建新会话"""
-    # 如果指定了tool_id，检查工具是否存在
+    # 如果指定了tool_id，使用 tools_db 检查工具是否存在
     if conversation_in.tool_id:
-        tool = await tool_crud.get(db, conversation_in.tool_id)
+        tool = await tool_crud.get(tools_db, conversation_in.tool_id)
         if not tool:
             raise HTTPException(status_code=400, detail="工具不存在")
     
-    conversation = await conversation_crud.create(db, conversation_in)
+    # 使用 chat_db 创建会话
+    conversation = await conversation_crud.create(chat_db, conversation_in)
     
     return ConversationResponse(
         id=conversation.id,
@@ -131,7 +133,7 @@ async def create_conversation(
 async def update_conversation(
     conversation_id: str,
     conversation_in: ConversationUpdate,
-    db: AsyncSession = Depends(get_session)
+    db: AsyncSession = Depends(get_chat_session)
 ):
     """更新会话（主要是修改标题）"""
     conversation = await conversation_crud.update(db, conversation_id, conversation_in)
@@ -153,7 +155,7 @@ async def update_conversation(
 @router.delete("/conversations/{conversation_id}")
 async def delete_conversation(
     conversation_id: str,
-    db: AsyncSession = Depends(get_session)
+    db: AsyncSession = Depends(get_chat_session)
 ):
     """删除会话"""
     success = await conversation_crud.delete(db, conversation_id)
@@ -165,7 +167,7 @@ async def delete_conversation(
 @router.delete("/conversations/{conversation_id}/messages")
 async def clear_conversation_messages(
     conversation_id: str,
-    db: AsyncSession = Depends(get_session)
+    db: AsyncSession = Depends(get_chat_session)
 ):
     """清空会话的所有消息"""
     # 检查会话是否存在
@@ -180,7 +182,7 @@ async def clear_conversation_messages(
 @router.get("/conversations/{conversation_id}/export", response_model=ExportConversationResponse)
 async def export_conversation(
     conversation_id: str,
-    db: AsyncSession = Depends(get_session)
+    db: AsyncSession = Depends(get_chat_session)
 ):
     """导出会话为Markdown格式"""
     conversation = await conversation_crud.get(db, conversation_id, with_messages=True)
@@ -225,7 +227,7 @@ async def export_conversation(
 @router.post("/conversations/{conversation_id}/generate-title")
 async def generate_conversation_title(
     conversation_id: str,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_chat_session),
     body: Optional[Dict[str, Any]] = Body(None),
 ):
     """自动生成对话标题"""

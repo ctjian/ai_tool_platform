@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import AsyncGenerator, Optional, Dict
 import json
 
-from app.database import get_session
+from app.database import get_session, get_chat_session
 from app.crud.conversation import conversation_crud, message_crud
 from app.crud.tool import tool_crud
 from app.schemas.chat import ChatRequest, StopChatRequest
@@ -45,7 +45,8 @@ async def generate_chat_stream(
     user_message: str,
     user_images: list,
     api_config,
-    db: AsyncSession,
+    chat_db: AsyncSession,
+    tools_db: AsyncSession,
     retry_message_id: str = None,
     selected_versions: Optional[Dict[str, int]] = None,
 ) -> AsyncGenerator[str, None]:
@@ -53,10 +54,10 @@ async def generate_chat_stream(
     
     try:
         # 1. 获取system prompt
-        # 如果指定了tool_id，获取工具的system prompt
+        # 如果指定了tool_id，使用 tools_db 获取工具的system prompt
         # 否则使用默认的system prompt
         if tool_id:
-            tool = await tool_crud.get(db, tool_id)
+            tool = await tool_crud.get(tools_db, tool_id)
             if not tool:
                 error_data = json.dumps({"error": "工具不存在"})
                 yield f"event: error\ndata: {error_data}\n\n"
@@ -79,8 +80,8 @@ async def generate_chat_stream(
 
 目标是让用户感到被认真对待，而不是被说服、被教育或被敷衍。"""
         
-        # 2. 获取会话历史消息
-        messages_history = await message_crud.get_by_conversation(db, conversation_id)
+        # 2. 使用 chat_db 获取会话历史消息
+        messages_history = await message_crud.get_by_conversation(chat_db, conversation_id)
         
         # 4. 构建OpenAI消息格式
         openai_messages = [
@@ -195,10 +196,10 @@ async def generate_chat_stream(
                 "content": user_message
             })
         
-        # 5. 如果不是重试，保存用户消息到数据库
+        # 5. 如果不是重试，使用 chat_db 保存用户消息到数据库
         if not retry_message_id:
             images_json = json.dumps(user_images) if user_images else None
-            await message_crud.create(db, conversation_id, "user", user_message, images_json)
+            await message_crud.create(chat_db, conversation_id, "user", user_message, images_json)
         
         # 6. 生成消息ID
         import uuid
@@ -227,12 +228,12 @@ async def generate_chat_stream(
             chunk_data = json.dumps({"content": chunk})
             yield f"event: token\ndata: {chunk_data}\n\n"
         
-        # 8. 保存AI响应到数据库
+        # 8. 使用 chat_db 保存AI响应到数据库
         if full_response and active_streams.get(conversation_id, False):
             assistant_msg = None
             if retry_message_id:
                 # 重试情况：更新现有消息，将当前content移动到retry_versions
-                update_msg = await message_crud.get(db, retry_message_id)
+                update_msg = await message_crud.get(chat_db, retry_message_id)
                 if update_msg:
                     # 获取现有的重试版本
                     retry_versions = []
@@ -248,11 +249,11 @@ async def generate_chat_stream(
                     # 更新消息：新内容作为当前content，旧内容存入retry_versions
                     update_msg.content = full_response
                     update_msg.retry_versions = json.dumps(retry_versions)
-                    await message_crud.update(db, retry_message_id, update_msg)
+                    await message_crud.update(chat_db, retry_message_id, update_msg)
                     assistant_msg = update_msg
             else:
                 # 正常情况：创建新消息
-                assistant_msg = await message_crud.create(db, conversation_id, "assistant", full_response)
+                assistant_msg = await message_crud.create(chat_db, conversation_id, "assistant", full_response)
             
             # 发送完成事件 - 包含完整的消息对象
             message_obj = {
@@ -289,19 +290,19 @@ async def generate_chat_stream(
 @router.post("/chat/stream")
 async def chat_stream(
     request: ChatRequest,
-    db: AsyncSession = Depends(get_session)
+    chat_db: AsyncSession = Depends(get_chat_session),
+    tools_db: AsyncSession = Depends(get_session)
 ):
     """流式聊天接口（SSE）"""
     
-    # 验证会话是否存在
-    conversation = await conversation_crud.get(db, request.conversation_id)
+    # 使用 chat_db 验证会话是否存在
+    conversation = await conversation_crud.get(chat_db, request.conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="会话不存在")
     
-    # 验证工具是否存在（如果提供了tool_id）
-    tool = None
+    # 验证工具是否存在（如果提供了tool_id），使用 tools_db
     if request.tool_id:
-        tool = await tool_crud.get(db, request.tool_id)
+        tool = await tool_crud.get(tools_db, request.tool_id)
         if not tool:
             raise HTTPException(status_code=404, detail="工具不存在")
     
@@ -312,7 +313,8 @@ async def chat_stream(
             request.message,
             request.images or [],
             request.api_config,
-            db,
+            chat_db,
+            tools_db,
             request.retry_message_id,
             request.selected_versions,
         ),

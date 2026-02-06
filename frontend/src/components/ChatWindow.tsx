@@ -129,10 +129,22 @@ function ChatWindow() {
     imageDataList: string[],
     options?: { skipInputReset?: boolean; autoTitle?: boolean; retryMessageId?: string }
   ) => {
-    if ((!messageContent.trim() && imageDataList.length === 0) || chatLoading || !apiConfig.api_key) return
+    if ((!messageContent.trim() && imageDataList.length === 0) || chatLoading) return
+    
+    // 检查是否有 API Key（前端或后端）
+    if (!apiConfig.api_key && !hasBackendApiKey) {
+      addToast('请先配置 API Key', 'warning')
+      return
+    }
 
-    // 对于工具对话，需要有currentTool；对于通用对话，不需要
-    if (!currentTool && !currentConversation) return
+    // 对于工具对话，需要有currentTool；对于通用对话，则不需要强制要求有currentConversation，因为我们会自动创建
+    if (currentTool && !currentConversation) {
+      // 如果是在工具模式下，但没有对话（比如刚切换工具），可以继续，因为会创建新对话
+    } else if (!currentTool && !currentConversation) {
+      // 如果是通用聊天模式，且没有对话，也可以继续
+    } else if (chatLoading) {
+      return;
+    }
 
     const shouldAutoTitle = options?.autoTitle ?? false
     const retryMessageId = options?.retryMessageId

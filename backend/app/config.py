@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     
     # 数据库配置
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/ai_tools.db"
+    CHAT_DATABASE_URL: str = "sqlite+aiosqlite:///./data/chat_history.db"  # 对话历史单独数据库
     
     # CORS配置
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:20102,http://localhost:5174"

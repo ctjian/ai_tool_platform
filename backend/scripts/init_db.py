@@ -6,7 +6,7 @@ from pathlib import Path
 # 添加项目根目录到Python路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.database import init_db, async_session_maker
+from app.database import init_db, tools_session_maker, chat_session_maker
 from app.models import Category, Tool
 from datetime import datetime
 
@@ -14,12 +14,19 @@ from datetime import datetime
 async def init_sample_data():
     """初始化示例数据"""
     
-    # 先初始化数据库表
+    # 先初始化两个数据库的表
     await init_db()
     
-    async with async_session_maker() as session:
+    from sqlalchemy import text
+    
+    # 清理对话历史数据库（messages/conversations）
+    async with chat_session_maker() as chat_session:
+        await chat_session.execute(text("DELETE FROM messages"))
+        await chat_session.execute(text("DELETE FROM conversations"))
+        await chat_session.commit()
+        
+    async with tools_session_maker() as session:
         # 强制清空所有表（用于重新初始化）
-        from sqlalchemy import text
         await session.execute(text("DELETE FROM messages"))
         await session.execute(text("DELETE FROM conversations"))
         await session.execute(text("DELETE FROM tools"))

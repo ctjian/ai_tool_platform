@@ -91,7 +91,12 @@ function App() {
   }
 
   const renderRightContent = () => {
-    // chat 模式 - 最高优先级，有工具或有对话时显示聊天窗口
+    // chat 模式 - 最高优先级
+    if (currentPage === 'chat') {
+      return <ChatWindow />;
+    }
+
+    // 有工具或有对话时显示聊天窗口
     if (currentTool || currentConversation) {
       return <ChatWindow />
     }

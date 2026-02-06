@@ -80,7 +80,7 @@ from app.api.v1 import tools, chat, conversations, config
 app.include_router(tools.router, prefix="/api/v1", tags=["tools"])
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
 app.include_router(conversations.router, prefix="/api/v1", tags=["conversations"])
-app.include_router(config.router, prefix="/api/v1", tags=["config"])
+app.include_router(config.router, prefix="/api/v1/config", tags=["config"])
 
 
 if __name__ == "__main__":
