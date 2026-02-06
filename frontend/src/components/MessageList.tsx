@@ -152,11 +152,21 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
                 style={a11yOneLight}
                 language={match[1]}
                 PreTag="div"
-                codeTagProps={{ style: { background: 'transparent' } }}
+                codeTagProps={{
+                  style: {
+                    background: 'transparent',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  },
+                }}
+                wrapLongLines
                 customStyle={{
                   background: 'transparent',
                   margin: 0,
                   padding: 0,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  overflowX: 'visible',
                 }}
                 {...props}
               >

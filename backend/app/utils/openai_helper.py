@@ -23,8 +23,13 @@ async def stream_chat_completion(
         生成的文本内容（逐token）
     """
     # 初始化客户端时只传递必要参数
+    api_key = api_config.api_key or settings.OPENAI_API_KEY
+    if not api_key:
+        yield json.dumps({"error": "未配置API Key"})
+        return
+
     client_kwargs = {
-        "api_key": api_config.api_key,
+        "api_key": api_key,
         "timeout": Timeout(15.0),  # 15秒超时
     }
     

@@ -37,7 +37,7 @@ async def get_default_config():
     }
 
 
-@router.get("/config", response_model=APIConfigResponse)
+@router.get("", response_model=APIConfigResponse)
 async def get_config(db: AsyncSession = Depends(get_session)):
     """获取API配置（API Key脱敏显示）"""
     config = await config_crud.get(db, API_CONFIG_KEY)
@@ -65,7 +65,7 @@ async def get_config(db: AsyncSession = Depends(get_session)):
     return APIConfigResponse(**config)
 
 
-@router.put("/config")
+@router.put("")
 async def update_config(
     config_in: APIConfigUpdate,
     db: AsyncSession = Depends(get_session)
@@ -97,7 +97,7 @@ async def update_config(
     return {"success": True, "message": "配置已更新"}
 
 
-@router.post("/config/test", response_model=TestConnectionResponse)
+@router.post("/test", response_model=TestConnectionResponse)
 async def test_connection(request: TestConnectionRequest):
     """测试OpenAI API连接"""
     try:

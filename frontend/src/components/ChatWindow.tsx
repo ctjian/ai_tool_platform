@@ -185,11 +185,11 @@ function ChatWindow() {
     const retryMessageId = options?.retryMessageId
 
     let waitingMessageId: string | null = null
+    let conversationId: string | null = currentConversation?.id || null
     try {
       setChatLoading(true)
 
       // 如果没有会话，先创建一个
-      let conversationId = currentConversation?.id
       let conversationTitle = currentConversation?.title
       if (!conversationId) {
         const newConv = await apiClient.createConversation(
@@ -542,7 +542,11 @@ function ChatWindow() {
 
   // 发送消息
   const handleSendMessage = async () => {
-    if ((!inputValue.trim() && images.length === 0) || chatLoading || !apiConfig.api_key) return
+    if ((!inputValue.trim() && images.length === 0) || chatLoading) return
+    if (!apiConfig.api_key && !hasBackendApiKey) {
+      addToast('请先配置 API Key', 'warning')
+      return
+    }
 
     const isFirstMessage = !currentConversation || messages.length === 0
 

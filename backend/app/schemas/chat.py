@@ -5,7 +5,8 @@ from typing import Optional, List, Dict
 
 class APIConfig(BaseModel):
     """OpenAI API配置"""
-    api_key: str = Field(..., min_length=1, description="OpenAI API Key")
+    # api_key 允许为空；后端会在需要时回退到 .env 配置
+    api_key: str = Field(default="", description="OpenAI API Key")
     base_url: str = Field(default="https://api.openai.com/v1", description="API基础URL")
     model: str = Field(default="gpt-4o-mini", description="模型名称")
     temperature: float = Field(default=0.7, ge=0, le=2, description="温度参数")
