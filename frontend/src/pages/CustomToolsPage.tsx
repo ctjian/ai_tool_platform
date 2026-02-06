@@ -181,6 +181,14 @@ export const CustomToolsPage = () => {
             </CardContent>
           </Card>
 
+          {selectedTool.id === 'bib-lookup' && (
+            <div className="text-xs text-gray-500">
+              致谢：该工具的数据与规范化流程参考 rebiber 项目。
+              源码链接：
+              <span className="ml-1 font-mono">https://github.com/yuchenlin/rebiber</span>
+            </div>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle>执行结果</CardTitle>
