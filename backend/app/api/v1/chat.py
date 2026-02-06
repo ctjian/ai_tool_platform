@@ -1,0 +1,335 @@
+"""聊天API（流式输出）"""
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+from typing import AsyncGenerator, Optional, Dict
+import json
+
+from app.database import get_session
+from app.crud.conversation import conversation_crud, message_crud
+from app.crud.tool import tool_crud
+from app.schemas.chat import ChatRequest, StopChatRequest
+from app.utils.openai_helper import stream_chat_completion
+
+router = APIRouter()
+
+# 全局字典存储正在进行的流式请求（用于停止功能）
+active_streams = {}
+
+
+def get_message_content(msg, selected_versions: Optional[Dict[str, int]] = None) -> str:
+    """
+    获取消息的显示内容，考虑选中的版本
+    
+    Args:
+        msg: 消息对象
+        selected_versions: 消息ID到版本索引的映射
+    
+    Returns:
+        消息内容
+    """
+    if msg.role == 'assistant' and msg.retry_versions and selected_versions and msg.id in selected_versions:
+        version_idx = selected_versions[msg.id]
+        try:
+            retry_versions = json.loads(msg.retry_versions) if isinstance(msg.retry_versions, str) else msg.retry_versions
+            if version_idx > 0 and version_idx <= len(retry_versions):
+                return retry_versions[version_idx - 1]
+        except:
+            pass
+    return msg.content
+
+
+async def generate_chat_stream(
+    conversation_id: str,
+    tool_id: str,
+    user_message: str,
+    user_images: list,
+    api_config,
+    db: AsyncSession,
+    retry_message_id: str = None,
+    selected_versions: Optional[Dict[str, int]] = None,
+) -> AsyncGenerator[str, None]:
+    """生成聊天流式响应"""
+    
+    try:
+        # 1. 获取system prompt
+        # 如果指定了tool_id，获取工具的system prompt
+        # 否则使用默认的system prompt
+        if tool_id:
+            tool = await tool_crud.get(db, tool_id)
+            if not tool:
+                error_data = json.dumps({"error": "工具不存在"})
+                yield f"event: error\ndata: {error_data}\n\n"
+                return
+            system_prompt = tool.system_prompt
+        else:
+            # 默认的system prompt - 通用对话模式
+            system_prompt = """你在对话中应当表现得自然、清晰、有条理。
+
+优先进行真正的交流，而不仅是给出答案。
+在回答问题时，关注用户的意图、语气和上下文，并相应调整表达方式。
+
+假设用户是理性且有理解能力的，不要居高临下，也不要过度简化。
+
+使用结构化表达来提升可读性，但避免生硬或学术化的语气。
+
+在适当的时候表现出理解、耐心和共情，但不要过度拟人或制造情绪。
+
+当存在不确定性时，应坦诚说明；当无法满足请求时，应清晰、礼貌地拒绝，并提供最接近的替代帮助。
+
+目标是让用户感到被认真对待，而不是被说服、被教育或被敷衍。"""
+        
+        # 2. 获取会话历史消息
+        messages_history = await message_crud.get_by_conversation(db, conversation_id)
+        
+        # 4. 构建OpenAI消息格式
+        openai_messages = [
+            {"role": "system", "content": system_prompt}
+        ]
+        
+        # 添加历史消息（如果是重试，则排除待重试的消息及其之后的消息，只保留用户的最后一条）
+        if retry_message_id:
+            for msg in messages_history:
+                if msg.id == retry_message_id:
+                    # 找到这条消息前最近的用户消息
+                    for prev_msg in reversed(messages_history[:messages_history.index(msg)]):
+                        if prev_msg.role == "user":
+                            if prev_msg.images:
+                                # 用户消息带图片
+                                content_parts = [{"type": "text", "text": prev_msg.content}] if prev_msg.content else []
+                                try:
+                                    images = json.loads(prev_msg.images)
+                                    for img_data in images:
+                                        content_parts.append({
+                                            "type": "image_url",
+                                            "image_url": {
+                                                "url": img_data
+                                            }
+                                        })
+                                except:
+                                    pass
+                                openai_messages.append({
+                                    "role": "user",
+                                    "content": content_parts
+                                })
+                            else:
+                                openai_messages.append({
+                                    "role": "user",
+                                    "content": prev_msg.content
+                                })
+                            break
+                    break
+                else:
+                    # 在待重试消息之前的消息，添加到对话历史
+                    if msg.role in ["user", "assistant"]:
+                        if msg.role == "user" and msg.images:
+                            # 用户消息带图片
+                            content_parts = [{"type": "text", "text": msg.content}] if msg.content else []
+                            try:
+                                images = json.loads(msg.images)
+                                for img_data in images:
+                                    content_parts.append({
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": img_data
+                                        }
+                                    })
+                            except:
+                                pass
+                            openai_messages.append({
+                                "role": "user",
+                                "content": content_parts
+                            })
+                        else:
+                            openai_messages.append({
+                                "role": msg.role,
+                            "content": get_message_content(msg, selected_versions)
+                        })
+        else:
+            # 非重试情况，正常添加所有历史消息
+            for msg in messages_history:
+                if msg.role in ["user", "assistant"]:
+                    if msg.role == "user" and msg.images:
+                        # 用户消息带图片
+                        content_parts = [{"type": "text", "text": msg.content}] if msg.content else []
+                        try:
+                            images = json.loads(msg.images)
+                            for img_data in images:
+                                content_parts.append({
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": img_data
+                                    }
+                                })
+                        except:
+                            pass
+                        openai_messages.append({
+                            "role": "user",
+                            "content": content_parts
+                        })
+                    else:
+                        openai_messages.append({
+                            "role": msg.role,
+                            "content": get_message_content(msg, selected_versions)
+                        })
+        
+        # 添加当前用户消息（支持图片）
+        if user_images and len(user_images) > 0:
+            # 带图片的消息，使用 vision API 格式
+            content_parts = [{"type": "text", "text": user_message}] if user_message else []
+            for img_data in user_images:
+                content_parts.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": img_data
+                    }
+                })
+            openai_messages.append({
+                "role": "user",
+                "content": content_parts
+            })
+        else:
+            # 纯文本消息
+            openai_messages.append({
+                "role": "user",
+                "content": user_message
+            })
+        
+        # 5. 如果不是重试，保存用户消息到数据库
+        if not retry_message_id:
+            images_json = json.dumps(user_images) if user_images else None
+            await message_crud.create(db, conversation_id, "user", user_message, images_json)
+        
+        # 6. 生成消息ID
+        import uuid
+        message_id = retry_message_id or str(uuid.uuid4())
+        
+        # 发送开始事件
+        start_data = json.dumps({"message_id": message_id})
+        yield f"event: start\ndata: {start_data}\n\n"
+        
+        # 7. 调用OpenAI流式API
+        full_response = ""
+        active_streams[conversation_id] = True
+        
+        async for chunk in stream_chat_completion(api_config, openai_messages):
+            # 检查是否被停止
+            if not active_streams.get(conversation_id, False):
+                yield f"event: stopped\ndata: {json.dumps({'message': '生成已停止'})}\n\n"
+                break
+            
+            # 检查是否是错误
+            if chunk.startswith("{") and "error" in chunk:
+                yield f"event: error\ndata: {chunk}\n\n"
+                break
+            
+            full_response += chunk
+            chunk_data = json.dumps({"content": chunk})
+            yield f"event: token\ndata: {chunk_data}\n\n"
+        
+        # 8. 保存AI响应到数据库
+        if full_response and active_streams.get(conversation_id, False):
+            assistant_msg = None
+            if retry_message_id:
+                # 重试情况：更新现有消息，将当前content移动到retry_versions
+                update_msg = await message_crud.get(db, retry_message_id)
+                if update_msg:
+                    # 获取现有的重试版本
+                    retry_versions = []
+                    if update_msg.retry_versions:
+                        try:
+                            retry_versions = json.loads(update_msg.retry_versions)
+                        except:
+                            retry_versions = []
+                    
+                    # 将当前内容添加到重试版本历史
+                    retry_versions.append(update_msg.content)
+                    
+                    # 更新消息：新内容作为当前content，旧内容存入retry_versions
+                    update_msg.content = full_response
+                    update_msg.retry_versions = json.dumps(retry_versions)
+                    await message_crud.update(db, retry_message_id, update_msg)
+                    assistant_msg = update_msg
+            else:
+                # 正常情况：创建新消息
+                assistant_msg = await message_crud.create(db, conversation_id, "assistant", full_response)
+            
+            # 发送完成事件 - 包含完整的消息对象
+            message_obj = {
+                "message_id": message_id,
+                "finish_reason": "stop"
+            }
+            
+            if assistant_msg:
+                message_obj["message"] = {
+                    "id": assistant_msg.id,
+                    "conversation_id": assistant_msg.conversation_id,
+                    "role": assistant_msg.role,
+                    "content": assistant_msg.content,
+                    "retry_versions": assistant_msg.retry_versions,
+                    "created_at": assistant_msg.created_at.isoformat() if assistant_msg.created_at else None,
+                }
+            
+            done_data = json.dumps(message_obj)
+            yield f"event: done\ndata: {done_data}\n\n"
+        
+        # 清理
+        if conversation_id in active_streams:
+            del active_streams[conversation_id]
+    
+    except Exception as e:
+        error_data = json.dumps({"error": f"服务器错误: {str(e)}"})
+        yield f"event: error\ndata: {error_data}\n\n"
+        
+        # 清理
+        if conversation_id in active_streams:
+            del active_streams[conversation_id]
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    request: ChatRequest,
+    db: AsyncSession = Depends(get_session)
+):
+    """流式聊天接口（SSE）"""
+    
+    # 验证会话是否存在
+    conversation = await conversation_crud.get(db, request.conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    
+    # 验证工具是否存在（如果提供了tool_id）
+    tool = None
+    if request.tool_id:
+        tool = await tool_crud.get(db, request.tool_id)
+        if not tool:
+            raise HTTPException(status_code=404, detail="工具不存在")
+    
+    return StreamingResponse(
+        generate_chat_stream(
+            request.conversation_id,
+            request.tool_id,
+            request.message,
+            request.images or [],
+            request.api_config,
+            db,
+            request.retry_message_id,
+            request.selected_versions,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # 禁用nginx缓冲
+        }
+    )
+
+
+@router.post("/chat/stop")
+async def stop_chat(request: StopChatRequest):
+    """停止生成"""
+    if request.conversation_id in active_streams:
+        active_streams[request.conversation_id] = False
+        return {"success": True, "message": "已发送停止信号"}
+    
+    return {"success": False, "message": "没有正在进行的生成"}
