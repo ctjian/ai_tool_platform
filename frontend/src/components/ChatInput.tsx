@@ -27,7 +27,6 @@ function ChatInput({
   onImagesChange,
 }: ChatInputProps) {
   const containerShadowClass = loading ? 'shadow-none' : 'shadow-sm'
-  const textareaDisabledBgClass = loading ? 'disabled:bg-transparent' : 'disabled:bg-gray-100'
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [previewImage, setPreviewImage] = useState<string | null>(null)
@@ -146,7 +145,7 @@ function ChatInput({
         )}
 
         {/* 输入区域 */}
-        <div className="relative flex items-end gap-2 p-3">
+        <div className="relative flex items-center gap-2 p-3">
           {/* 添加图片按钮 */}
           <button
             type="button"
@@ -181,14 +180,14 @@ function ChatInput({
               onPaste={handlePaste}
               placeholder="有问题，尽管问"
               disabled={disabled || loading}
-              className={`w-full pl-2 pr-12 py-2 bg-transparent text-gray-900 resize-none focus:outline-none ${textareaDisabledBgClass} disabled:cursor-not-allowed text-base placeholder-gray-500`}
+              className={`w-full pl-2 pr-12 py-2 bg-transparent text-gray-900 resize-none focus:outline-none disabled:bg-transparent disabled:cursor-not-allowed text-base placeholder-gray-500`}
               rows={1}
               style={{ minHeight: '40px', maxHeight: '200px' }}
             />
             <button
               onClick={onSend}
               disabled={disabled || loading || (!value.trim() && images.length === 0)}
-              className="absolute right-0 bottom-0 flex items-center justify-center bg-gray-800 text-white w-10 h-10 rounded-full hover:bg-gray-900 transition disabled:opacity-30 disabled:cursor-not-allowed"
+              className="absolute right-0 top-1/2 -translate-y-1/2 flex items-center justify-center bg-gray-800 text-white w-10 h-10 rounded-full hover:bg-gray-900 transition disabled:opacity-30 disabled:cursor-not-allowed"
             >
               {loading ? (
                 <Loader size={18} className="animate-spin" />

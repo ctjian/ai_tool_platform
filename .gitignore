@@ -30,6 +30,10 @@ logs/
 # Env files
 .env
 
+# Database files
+*.db
+data/
+
 # OS / Editor
 .DS_Store
 .idea/

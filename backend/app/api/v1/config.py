@@ -26,6 +26,16 @@ def mask_api_key(api_key: str) -> str:
     return f"{api_key[:3]}***{api_key[-4:]}"
 
 
+@router.get("/default")
+async def get_default_config():
+    """获取后端默认配置（从.env读取）"""
+    return {
+        "has_api_key": bool(settings.OPENAI_API_KEY),
+        "base_url": settings.OPENAI_BASE_URL,
+        "model": settings.OPENAI_MODEL,
+    }
+
+
 @router.get("/config", response_model=APIConfigResponse)
 async def get_config(db: AsyncSession = Depends(get_session)):
     """获取API配置（API Key脱敏显示）"""

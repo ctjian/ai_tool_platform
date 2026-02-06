@@ -17,6 +17,9 @@ function App() {
     setConversations,
     setCurrentConversation,
     currentConversation,
+    apiConfig,
+    setApiConfig,
+    setHasBackendApiKey,
   } = useAppStore()
 
   const [currentPage, setCurrentPage] = useState<'chat' | 'settings' | 'explorer'>('chat')
@@ -25,6 +28,29 @@ function App() {
     const loadInitialData = async () => {
       try {
         setLoading(true)
+        
+        // 加载后端默认配置
+        try {
+          const defaultConfigRes = await apiClient.getDefaultConfig()
+          const { has_api_key, base_url, model } = defaultConfigRes.data
+          
+          // 记录后端是否有 API key
+          setHasBackendApiKey(has_api_key)
+          
+          // 如果前端localStorage没有配置，使用后端默认值
+          if (!apiConfig.api_key && has_api_key) {
+            // 不需要真的设置 api_key，只需要标记后端有配置
+            // 后端会自动使用 .env 中的配置
+          }
+          if (!localStorage.getItem('apiConfigBaseUrl')) {
+            setApiConfig({ base_url })
+          }
+          if (!localStorage.getItem('apiConfigModel')) {
+            setApiConfig({ model })
+          }
+        } catch (error) {
+          console.error('Failed to load default config:', error)
+        }
         
         // 加载分类
         const catRes = await apiClient.getCategories()

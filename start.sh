@@ -42,7 +42,7 @@ echo "API文档: http://localhost:8000/docs"
 echo ""
 
 # 在后台启动后端
-nohup uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 > logs/backend.log 2>&1 &
+nohup uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 > backend.log 2>&1 &
 BACKEND_PID=$!
 echo "后端PID: $BACKEND_PID"
 
@@ -85,4 +85,27 @@ cleanup() {
 
 # 捕获 SIGINT 信号（Ctrl+C）
 trap cleanup SIGINT
+
+# 显示启动信息
+echo "========================================="
+echo -e "${GREEN}✓ 所有服务已启动${NC}"
+echo "========================================="
+echo ""
+echo "📚 后端服务"
+echo "   地址: http://localhost:8000"
+echo "   API文档: http://localhost:8000/docs"
+echo ""
+echo "🎨 前端服务"
+echo "   地址: http://localhost:20102"
+echo ""
+echo "📝 日志文件"
+echo "   后端: backend.log"
+echo "   前端: 在终端显示"
+echo ""
+echo "⏹️  停止服务: 按 Ctrl+C"
+echo "========================================="
+echo ""
+
+# 等待进程
+wait
 

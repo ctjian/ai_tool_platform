@@ -115,6 +115,7 @@ export const apiClient = {
     api.post(`/chat/stop`, { conversation_id: conversationId }),
   
   // 配置相关
+  getDefaultConfig: () => api.get<{ has_api_key: boolean; base_url: string; model: string }>('/config/default'),
   getConfig: () => api.get<Record<string, any>>('/config'),
   updateConfig: (config: Record<string, any>) =>
     api.put('/config', config),

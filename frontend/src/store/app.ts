@@ -27,6 +27,7 @@ interface AppState {
   chatLoading: boolean
   apiKey: string
   apiConfig: APIConfig
+  hasBackendApiKey: boolean  // 后端是否配置了API Key
   versionIndices: Record<string, number>  // 记录每条消息选中的版本索引
   
   // 操作
@@ -41,6 +42,7 @@ interface AppState {
   setChatLoading: (loading: boolean) => void
   setApiKey: (key: string) => void
   setApiConfig: (config: Partial<APIConfig>) => void
+  setHasBackendApiKey: (has: boolean) => void
   setVersionIndices: (indices: Record<string, number>) => void
   
   addMessage: (message: Message) => void
@@ -58,6 +60,7 @@ export const useAppStore = create<AppState>((set) => ({
   loading: false,
   chatLoading: false,
   apiKey: localStorage.getItem('apiKey') || '',
+  hasBackendApiKey: false,
   apiConfig: {
     api_key: localStorage.getItem('apiKey') || '',
     base_url: localStorage.getItem('apiConfigBaseUrl') || 'https://api.yunwu.ai/v1',
@@ -106,6 +109,7 @@ export const useAppStore = create<AppState>((set) => ({
       return { apiConfig: newConfig }
     })
   },
+  setHasBackendApiKey: (has) => set({ hasBackendApiKey: has }),
   setVersionIndices: (indices) => set({ versionIndices: indices }),
   
   addMessage: (message) => set((state) => ({ 

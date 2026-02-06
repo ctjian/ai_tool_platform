@@ -35,6 +35,7 @@ function ChatWindow() {
     conversations,
     setConversations,
     apiConfig,
+    hasBackendApiKey,
     chatLoading,
     setChatLoading,
     versionIndices,
@@ -479,14 +480,14 @@ function ChatWindow() {
               value={inputValue}
               onChange={setInputValue}
               onSend={handleSendMessage}
-              disabled={chatLoading || !apiConfig.api_key}
+              disabled={chatLoading}
               loading={chatLoading}
               images={images}
               onImagesChange={setImages}
             />
-            {!apiConfig.api_key && (
-              <p className="text-xs text-red-600 mt-2 text-center">
-                ⚠️ 请先在设置中配置 OpenAI API Key
+            {!apiConfig.api_key && !hasBackendApiKey && (
+              <p className="text-xs text-yellow-600 mt-2 text-center">
+                ⚠️ 提示：可在设置中配置 API Key
               </p>
             )}
           </div>
@@ -503,14 +504,14 @@ function ChatWindow() {
                 value={inputValue}
                 onChange={setInputValue}
                 onSend={handleSendMessage}
-                disabled={chatLoading || !apiConfig.api_key}
+                disabled={chatLoading}
                 loading={chatLoading}
                 images={images}
                 onImagesChange={setImages}
               />
-              {!apiConfig.api_key && (
-                <p className="text-xs text-red-600 mt-2">
-                  ⚠️ 请先在设置中配置 OpenAI API Key
+              {!apiConfig.api_key && !hasBackendApiKey && (
+                <p className="text-xs text-yellow-600 mt-2">
+                  ⚠️ 提示：可在设置中配置 API Key
                 </p>
               )}
             </div>
