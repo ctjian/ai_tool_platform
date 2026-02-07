@@ -51,6 +51,7 @@ async def generate_chat_stream(
     tools_db: AsyncSession,
     retry_message_id: str = None,
     selected_versions: Optional[Dict[str, int]] = None,
+    context_rounds: Optional[int] = None,
 ) -> AsyncGenerator[str, None]:
     """生成聊天流式响应"""
     
@@ -84,70 +85,52 @@ async def generate_chat_stream(
         
         # 2. 使用 chat_db 获取会话历史消息
         messages_history = await message_crud.get_by_conversation(chat_db, conversation_id)
+        if retry_message_id:
+            trimmed = []
+            for msg in messages_history:
+                if msg.id == retry_message_id:
+                    break
+                trimmed.append(msg)
+            messages_history = trimmed
+
+        if context_rounds:
+            # 保留最近N轮（以用户消息为轮次起点）
+            user_indices = [i for i, msg in enumerate(messages_history) if msg.role == "user"]
+            if len(user_indices) > context_rounds:
+                start_idx = user_indices[-context_rounds]
+                messages_history = messages_history[start_idx:]
         
         # 4. 构建OpenAI消息格式
         openai_messages = [
             {"role": "system", "content": system_prompt}
         ]
         
-        # 添加历史消息（如果是重试，则排除待重试的消息及其之后的消息）
-        if retry_message_id:
-            for msg in messages_history:
-                if msg.id == retry_message_id:
-                    break
-                else:
-                    # 在待重试消息之前的消息，添加到对话历史
-                    if msg.role in ["user", "assistant"]:
-                        if msg.role == "user" and msg.images:
-                            # 用户消息带图片
-                            content_parts = [{"type": "text", "text": msg.content}] if msg.content else []
-                            try:
-                                images = json.loads(msg.images)
-                                for img_data in images:
-                                    content_parts.append({
-                                        "type": "image_url",
-                                        "image_url": {
-                                            "url": img_data
-                                        }
-                                    })
-                            except:
-                                pass
-                            openai_messages.append({
-                                "role": "user",
-                                "content": content_parts
+        # 添加历史消息
+        for msg in messages_history:
+            if msg.role in ["user", "assistant"]:
+                if msg.role == "user" and msg.images:
+                    # 用户消息带图片
+                    content_parts = [{"type": "text", "text": msg.content}] if msg.content else []
+                    try:
+                        images = json.loads(msg.images)
+                        for img_data in images:
+                            content_parts.append({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": img_data
+                                }
                             })
-                        else:
-                            openai_messages.append({
-                                "role": msg.role,
-                            "content": get_message_content(msg, selected_versions)
-                        })
-        else:
-            # 非重试情况，正常添加所有历史消息
-            for msg in messages_history:
-                if msg.role in ["user", "assistant"]:
-                    if msg.role == "user" and msg.images:
-                        # 用户消息带图片
-                        content_parts = [{"type": "text", "text": msg.content}] if msg.content else []
-                        try:
-                            images = json.loads(msg.images)
-                            for img_data in images:
-                                content_parts.append({
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": img_data
-                                    }
-                                })
-                        except:
-                            pass
-                        openai_messages.append({
-                            "role": "user",
-                            "content": content_parts
-                        })
-                    else:
-                        openai_messages.append({
-                            "role": msg.role,
-                            "content": get_message_content(msg, selected_versions)
-                        })
+                    except:
+                        pass
+                    openai_messages.append({
+                        "role": "user",
+                        "content": content_parts
+                    })
+                else:
+                    openai_messages.append({
+                        "role": msg.role,
+                        "content": get_message_content(msg, selected_versions)
+                    })
         
         # 添加当前用户消息（支持图片）
         # 重试时不重复添加当前用户消息，避免重复输入
@@ -326,6 +309,7 @@ async def chat_stream(
             tools_db,
             request.retry_message_id,
             request.selected_versions,
+            request.context_rounds,
         ),
         media_type="text/event-stream",
         headers={

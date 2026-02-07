@@ -23,6 +23,12 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, description="用户消息")
     images: Optional[List[str]] = Field(None, description="图片base64列表")
     api_config: APIConfig = Field(..., description="API配置")
+    context_rounds: Optional[int] = Field(
+        None,
+        ge=5,
+        le=20,
+        description="上下文轮数（保留最近N轮用户对话）",
+    )
     retry_message_id: Optional[str] = Field(None, description="重试的消息ID（如果是重试操作）")
     selected_versions: Optional[Dict[str, int]] = Field(None, description="每条消息选中的版本索引（message_id -> version_index）")
 

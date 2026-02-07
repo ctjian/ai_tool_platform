@@ -43,6 +43,8 @@ function ChatWindow() {
     setChatLoading,
     versionIndices,
     setVersionIndices,
+    contextRounds,
+    setContextRounds,
   } = useAppStore()
 
   const [inputValue, setInputValue] = useState('')
@@ -230,6 +232,7 @@ function ChatWindow() {
         tool_id: currentTool?.id ?? null,
         message: messageContent,
         images: imageDataList,
+        context_rounds: contextRounds,
         api_config: {
           api_key: apiConfig.api_key,
           base_url: apiConfig.base_url,
@@ -700,6 +703,18 @@ function ChatWindow() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">上下文轮数</span>
+            <select
+              value={contextRounds}
+              onChange={(e) => setContextRounds(parseInt(e.target.value, 10))}
+              className="text-xs border border-gray-200 rounded-md px-2 py-1 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-gray-300"
+            >
+              {Array.from({ length: 16 }, (_, i) => 5 + i).map((n) => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+          </div>
           {currentTool && (
             <button
               onClick={handleNewConversation}

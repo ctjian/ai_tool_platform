@@ -56,6 +56,7 @@ export interface ChatRequest {
     frequency_penalty?: number
     presence_penalty?: number
   }
+  context_rounds?: number
   retry_message_id?: string
   selected_versions?: Record<string, number>
 }

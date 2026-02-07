@@ -33,6 +33,8 @@ logs/
 # Database files
 *.db
 data/
+!backend/data/
+!backend/data/pricing.json
 
 # OS / Editor
 .DS_Store

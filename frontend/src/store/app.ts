@@ -31,6 +31,7 @@ interface AppState {
   apiConfig: APIConfig
   hasBackendApiKey: boolean  // 后端是否配置了API Key
   versionIndices: Record<string, number>  // 记录每条消息选中的版本索引
+  contextRounds: number  // 上下文轮数
   
   // 操作
   setCategories: (categories: Category[]) => void
@@ -48,6 +49,7 @@ interface AppState {
   setApiConfig: (config: Partial<APIConfig>) => void
   setHasBackendApiKey: (has: boolean) => void
   setVersionIndices: (indices: Record<string, number>) => void
+  setContextRounds: (rounds: number) => void
   
   addMessage: (message: Message) => void
   clearMessages: () => void
@@ -78,6 +80,11 @@ export const useAppStore = create<AppState>((set) => ({
     presence_penalty: parseFloat(localStorage.getItem('apiConfigPresencePenalty') || '0.0'),
   },
   versionIndices: {},
+  contextRounds: (() => {
+    const raw = parseInt(localStorage.getItem('contextRounds') || '5', 10)
+    if (Number.isNaN(raw)) return 5
+    return Math.min(20, Math.max(5, raw))
+  })(),
   
   setCategories: (categories) => set({ categories }),
   setTools: (tools) => set({ tools }),
@@ -119,6 +126,11 @@ export const useAppStore = create<AppState>((set) => ({
   },
   setHasBackendApiKey: (has) => set({ hasBackendApiKey: has }),
   setVersionIndices: (indices) => set({ versionIndices: indices }),
+  setContextRounds: (rounds) => {
+    const clamped = Math.min(20, Math.max(5, rounds))
+    localStorage.setItem('contextRounds', String(clamped))
+    set({ contextRounds: clamped })
+  },
   
   addMessage: (message) => set((state) => ({ 
     messages: [...state.messages, message] 
