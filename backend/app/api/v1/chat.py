@@ -10,11 +10,13 @@ from app.crud.conversation import conversation_crud, message_crud
 from app.crud.tool import tool_crud
 from app.schemas.chat import ChatRequest, StopChatRequest
 from app.utils.openai_helper import stream_chat_completion
+from app.utils.pricing import compute_text_cost
 
 router = APIRouter()
 
 # 全局字典存储正在进行的流式请求（用于停止功能）
 active_streams = {}
+
 
 
 def get_message_content(msg, selected_versions: Optional[Dict[str, int]] = None) -> str:
@@ -190,25 +192,45 @@ async def generate_chat_stream(
             yield f"event: error\ndata: {error_data}\n\n"
             return
         full_response = ""
+        usage_data: Optional[Dict] = None
         active_streams[conversation_id] = True
         
-        async for chunk in stream_chat_completion(api_config, openai_messages):
+        async for event in stream_chat_completion(api_config, openai_messages):
             # 检查是否被停止
             if not active_streams.get(conversation_id, False):
                 yield f"event: stopped\ndata: {json.dumps({'message': '生成已停止'})}\n\n"
                 break
             
             # 检查是否是错误
-            if chunk.startswith("{") and "error" in chunk:
-                yield f"event: error\ndata: {chunk}\n\n"
+            if event.get("type") == "error":
+                yield f"event: error\ndata: {json.dumps({'error': event.get('error')})}\n\n"
                 break
             
+            if event.get("type") == "usage":
+                usage_data = event.get("usage")
+                continue
+            
+            if event.get("type") != "token":
+                continue
+            chunk = event.get("content", "")
             full_response += chunk
             chunk_data = json.dumps({"content": chunk})
             yield f"event: token\ndata: {chunk_data}\n\n"
         
         # 8. 使用 chat_db 保存AI响应到数据库
         if full_response and active_streams.get(conversation_id, False):
+            cost_meta: Optional[Dict] = None
+            if usage_data:
+                prompt_tokens = int(usage_data.get("prompt_tokens") or 0)
+                completion_tokens = int(usage_data.get("completion_tokens") or 0)
+                if prompt_tokens or completion_tokens:
+                    cost_meta = compute_text_cost(
+                        api_config.model,
+                        prompt_tokens,
+                        completion_tokens,
+                    )
+            cost_meta_json = json.dumps(cost_meta, ensure_ascii=False) if cost_meta else None
+
             assistant_msg = None
             if retry_message_id:
                 # 重试情况：更新现有消息，将当前content移动到retry_versions
@@ -227,12 +249,19 @@ async def generate_chat_stream(
                     
                     # 更新消息：新内容作为当前content，旧内容存入retry_versions
                     update_msg.content = full_response
+                    update_msg.cost_meta = cost_meta_json
                     update_msg.retry_versions = json.dumps(retry_versions)
                     await message_crud.update(chat_db, retry_message_id, update_msg)
                     assistant_msg = update_msg
             else:
                 # 正常情况：创建新消息
-                assistant_msg = await message_crud.create(chat_db, conversation_id, "assistant", full_response)
+                assistant_msg = await message_crud.create(
+                    chat_db,
+                    conversation_id,
+                    "assistant",
+                    full_response,
+                    cost_meta=cost_meta_json,
+                )
             
             # 发送完成事件 - 包含完整的消息对象
             message_obj = {
@@ -247,6 +276,7 @@ async def generate_chat_stream(
                     "role": assistant_msg.role,
                     "content": assistant_msg.content,
                     "retry_versions": assistant_msg.retry_versions,
+                    "cost_meta": cost_meta,
                     "created_at": assistant_msg.created_at.isoformat() if assistant_msg.created_at else None,
                 }
             

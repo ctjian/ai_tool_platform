@@ -2,11 +2,12 @@
 from pydantic_settings import BaseSettings
 from pydantic import Field
 from typing import List
+from pathlib import Path
 
 
 class Settings(BaseSettings):
     """应用配置类"""
-    
+
     # 应用信息
     APP_NAME: str = "AI工具平台"
     APP_VERSION: str = "1.0.0"
@@ -30,6 +31,12 @@ class Settings(BaseSettings):
     TITLE_MODEL: str = Field("gpt-4o-mini", validation_alias="Title_MODEL")
     # 逗号分隔模型，分组用 ;，格式：Group:model1,model2;Group2:model3
     OPENAI_MODELS: str = "OpenAI:gpt-4o-mini,gpt-4o"
+
+    # 计费配置
+    PRICING_FILE: str = str(Path(__file__).resolve().parents[1] / "data" / "pricing.json")
+    PRICE_INPUT_PER_1M: float = 2.0  # 基础输入价格（美元/1M tokens）
+    PRICE_GROUP_RATIO: float = 1.5  # 分组倍率
+    PRICE_CURRENCY: str = "USD"
     
     # 日志配置
     LOG_LEVEL: str = "INFO"

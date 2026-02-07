@@ -80,6 +80,25 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
       return msg.content
     }
 
+    const extractCostMeta = (content: string, rawCost: any): { text: string; cost: any | null } => {
+      let parsedCost = rawCost
+      if (typeof rawCost === 'string') {
+        try {
+          parsedCost = JSON.parse(rawCost)
+        } catch {
+          parsedCost = null
+        }
+      }
+      return { text: content, cost: parsedCost || null }
+    }
+
+    const formatCost = (value: number): string => {
+      if (!Number.isFinite(value)) return '0'
+      if (value === 0) return '0'
+      if (value < 0.0001) return value.toExponential(2)
+      return value.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
+    }
+
     // 获取版本总数
     const getTotalVersions = (msg: Message): number => {
       if (msg.role === 'assistant' && msg.retry_versions) {
@@ -216,7 +235,8 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
               const displayVersionIndex = totalVersions > 0
                 ? (currentVersionIndex === 0 ? totalVersions : currentVersionIndex)
                 : 0
-              const displayContent = getMessageContent(msg)
+              const rawContent = getMessageContent(msg)
+              const { text: displayContent, cost } = extractCostMeta(rawContent, msg.cost_meta)
               const isWaiting = msg.role === 'assistant' && displayContent === '__waiting__'
               
               return (
@@ -268,6 +288,12 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
                           </ReactMarkdown>
                         )}
                       </div>
+                      {cost && (
+                        <div className="mt-2 text-xs text-gray-500">
+                          费用 {cost.currency === 'USD' ? '$' : ''}{formatCost(cost.total_cost)}{' '}
+                          (prompt {cost.prompt_tokens}, completion {cost.completion_tokens}, total {cost.total_tokens})
+                        </div>
+                      )}
                       <div className="mt-2 flex items-center gap-2 text-xs text-gray-500">
                         {/* 版本选择器 */}
                         {totalVersions > 0 && (

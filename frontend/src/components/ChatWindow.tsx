@@ -221,8 +221,6 @@ function ChatWindow() {
       if (!options?.skipInputReset) {
         setInputValue('')
         setImages([])
-        // 清理图片预览 URL
-        images.forEach(img => URL.revokeObjectURL(img.preview))
       }
 
       // 调用聊天API - 使用完整的API配置

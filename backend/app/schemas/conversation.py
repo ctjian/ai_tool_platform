@@ -1,5 +1,5 @@
 """会话相关的Pydantic schemas"""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
 
@@ -22,9 +22,25 @@ class MessageResponse(MessageBase):
     conversation_id: str
     created_at: datetime
     retry_versions: Optional[List[str]] = Field(None, description="重试版本列表（之前的回复）")
+    cost_meta: Optional[dict] = Field(None, description="计费信息")
     
     class Config:
         from_attributes = True
+
+    @field_validator("cost_meta", mode="before")
+    @classmethod
+    def parse_cost_meta(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, str):
+            try:
+                import json
+                return json.loads(v)
+            except Exception:
+                return None
+        return None
 
 
 class ConversationBase(BaseModel):

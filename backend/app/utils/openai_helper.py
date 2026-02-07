@@ -1,6 +1,6 @@
 """OpenAI辅助函数"""
 from openai import AsyncOpenAI
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Dict, Any
 import json
 from httpx import Timeout
 
@@ -11,7 +11,7 @@ from app.config import settings
 async def stream_chat_completion(
     api_config: APIConfig,
     messages: list[dict],
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[Dict[str, Any], None]:
     """
     流式调用OpenAI Chat Completion API
     
@@ -40,27 +40,50 @@ async def stream_chat_completion(
     client = AsyncOpenAI(**client_kwargs)
     
     try:
-        stream = await client.chat.completions.create(
-            model=api_config.model,
-            messages=messages,
-            temperature=api_config.temperature,
-            max_tokens=api_config.max_tokens,
-            top_p=api_config.top_p,
-            frequency_penalty=api_config.frequency_penalty,
-            presence_penalty=api_config.presence_penalty,
-            stream=True,
-        )
+        try:
+            stream = await client.chat.completions.create(
+                model=api_config.model,
+                messages=messages,
+                temperature=api_config.temperature,
+                max_tokens=api_config.max_tokens,
+                top_p=api_config.top_p,
+                frequency_penalty=api_config.frequency_penalty,
+                presence_penalty=api_config.presence_penalty,
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+        except TypeError as e:
+            # 兼容旧版本 openai SDK：不支持 stream_options
+            if "stream_options" not in str(e):
+                raise
+            stream = await client.chat.completions.create(
+                model=api_config.model,
+                messages=messages,
+                temperature=api_config.temperature,
+                max_tokens=api_config.max_tokens,
+                top_p=api_config.top_p,
+                frequency_penalty=api_config.frequency_penalty,
+                presence_penalty=api_config.presence_penalty,
+                stream=True,
+            )
         
         async for chunk in stream:
             # 检查chunk是否有choices且不为空
             if chunk.choices and len(chunk.choices) > 0:
                 delta = chunk.choices[0].delta
                 if delta and delta.content:
-                    yield delta.content
+                    yield {"type": "token", "content": delta.content}
+            usage = getattr(chunk, "usage", None)
+            if usage and getattr(usage, "total_tokens", None):
+                if hasattr(usage, "model_dump"):
+                    usage_data = usage.model_dump()
+                else:
+                    usage_data = dict(usage)
+                yield {"type": "usage", "usage": usage_data}
     
     except Exception as e:
         error_msg = f"OpenAI API错误: {str(e)}"
-        yield json.dumps({"error": error_msg})
+        yield {"type": "error", "error": error_msg}
 
 
 async def test_openai_connection(

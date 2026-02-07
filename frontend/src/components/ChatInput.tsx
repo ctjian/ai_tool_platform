@@ -30,6 +30,7 @@ function ChatInput({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [previewImage, setPreviewImage] = useState<string | null>(null)
+  const prevImagesRef = useRef<ImageFile[]>([])
 
   const adjustTextareaHeight = () => {
     if (!textareaRef.current) return
@@ -41,6 +42,21 @@ function ChatInput({
   useEffect(() => {
     adjustTextareaHeight()
   }, [value])
+
+  // 统一回收已移除的预览 URL，避免 blob 404 报错
+  useEffect(() => {
+    const prevImages = prevImagesRef.current
+    const currentIds = new Set(images.map(img => img.id))
+    for (const img of prevImages) {
+      if (!currentIds.has(img.id)) {
+        URL.revokeObjectURL(img.preview)
+        if (previewImage === img.preview) {
+          setPreviewImage(null)
+        }
+      }
+    }
+    prevImagesRef.current = images
+  }, [images, previewImage])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !disabled) {
@@ -112,10 +128,6 @@ function ChatInput({
   }
 
   const removeImage = (id: string) => {
-    const image = images.find(img => img.id === id)
-    if (image) {
-      URL.revokeObjectURL(image.preview)
-    }
     onImagesChange?.(images.filter(img => img.id !== id))
   }
 
