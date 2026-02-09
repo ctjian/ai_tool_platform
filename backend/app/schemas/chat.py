@@ -25,7 +25,7 @@ class ChatRequest(BaseModel):
     api_config: APIConfig = Field(..., description="API配置")
     context_rounds: Optional[int] = Field(
         None,
-        ge=5,
+        ge=1,
         le=20,
         description="上下文轮数（保留最近N轮用户对话）",
     )

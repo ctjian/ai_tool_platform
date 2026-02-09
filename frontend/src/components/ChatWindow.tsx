@@ -886,7 +886,7 @@ function ChatWindow() {
               onChange={(e) => setContextRounds(parseInt(e.target.value, 10))}
               className="text-xs border border-gray-200 rounded-md px-2 py-1 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-gray-300"
             >
-              {Array.from({ length: 16 }, (_, i) => 5 + i).map((n) => (
+              {Array.from({ length: 20 }, (_, i) => 1 + i).map((n) => (
                 <option key={n} value={n}>{n}</option>
               ))}
             </select>
