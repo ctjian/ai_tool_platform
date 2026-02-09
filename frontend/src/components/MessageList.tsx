@@ -229,7 +229,7 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     const visibleMessages = messages.filter((msg) => msg.role !== 'system')
 
     return (
-      <div className="flex-1 overflow-y-auto px-6 py-4 bg-white">
+      <div ref={ref} className="h-full min-h-0 overflow-y-auto overscroll-contain px-6 py-4 bg-white">
         <div className="max-w-3xl mx-auto space-y-6">
             {visibleMessages.map((msg) => {
               const totalVersions = getTotalVersions(msg)
@@ -266,7 +266,7 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
                                               </div>
                                             )}
                                             {/* 文本内容 */}
-                      <div className="text-gray-900">
+                      <div className="text-gray-900 max-h-64 overflow-y-auto pr-1">
                         <ReactMarkdown
                           remarkPlugins={[remarkGfm, remarkMath]}
                           rehypePlugins={[rehypeKatex]}
@@ -390,8 +390,6 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
             )
             })}
         </div>
-        <div ref={ref} />
-
         {/* 图片放大预览 */}
         {previewImage && (
           <div

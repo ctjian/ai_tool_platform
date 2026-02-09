@@ -91,7 +91,7 @@ function ChatWindow() {
     const listPaddingTop = 8
     return idx * itemHeight + listPaddingTop
   }, [availableModelGroups, selectedVendor])
-  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const hasVisibleMessages = useMemo(
     () => messages.some((m) => m.role !== 'system'),
@@ -99,7 +99,12 @@ function ChatWindow() {
   )
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const container = messagesContainerRef.current
+    if (!container) return
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior: 'smooth',
+    })
   }, [messages])
 
   useEffect(() => {
@@ -769,7 +774,7 @@ function ChatWindow() {
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-white text-gray-900 h-full overflow-hidden relative">
+    <div className="flex-1 flex flex-col bg-white text-gray-900 h-full overflow-hidden relative min-h-0">
       {/* 工具栏 */}
       <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between bg-white flex-shrink-0">
         <div className="flex items-center gap-4">
@@ -940,8 +945,8 @@ function ChatWindow() {
       ) : (
         /* 有消息时：正常的消息列表 + 底部输入框布局 */
         <>
-          <div className="flex-1 overflow-y-auto bg-white">
-            <MessageList messages={messages} ref={messagesEndRef} onRetry={handleRetryMessage} />
+          <div className="flex-1 bg-white min-h-0 overflow-hidden">
+            <MessageList messages={messages} ref={messagesContainerRef} onRetry={handleRetryMessage} />
           </div>
           <div className="p-4 bg-white flex-shrink-0">
             <div className="max-w-3xl mx-auto">
