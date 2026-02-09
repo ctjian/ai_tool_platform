@@ -759,6 +759,10 @@ function ChatWindow() {
         updated[msgIdx] = {
           ...updated[msgIdx],
           content: '__waiting__',
+          thinking: '',
+          thinking_collapsed: true,
+          thinking_done: false,
+          cost_meta: null,
         }
         return updated
       }
