@@ -2,6 +2,7 @@
 from openai import AsyncOpenAI
 from typing import AsyncGenerator, Dict, Any
 import json
+import json
 from httpx import Timeout
 
 from app.schemas.chat import APIConfig
@@ -67,12 +68,37 @@ async def stream_chat_completion(
                 stream=True,
             )
         
+        def get_delta_field(delta, name: str):
+            if hasattr(delta, name):
+                return getattr(delta, name)
+            if isinstance(delta, dict):
+                return delta.get(name)
+            return None
+
+        def normalize_reasoning(value):
+            if value is None:
+                return None
+            if isinstance(value, str):
+                return value
+            if isinstance(value, list):
+                if all(isinstance(v, str) for v in value):
+                    return "".join(value)
+                return json.dumps(value, ensure_ascii=False)
+            return str(value)
+
         async for chunk in stream:
             # 检查chunk是否有choices且不为空
             if chunk.choices and len(chunk.choices) > 0:
                 delta = chunk.choices[0].delta
                 if delta and delta.content:
                     yield {"type": "token", "content": delta.content}
+                reasoning = normalize_reasoning(
+                    get_delta_field(delta, "reasoning_content")
+                    or get_delta_field(delta, "reasoning")
+                    or get_delta_field(delta, "thinking")
+                )
+                if reasoning:
+                    yield {"type": "thinking", "content": reasoning}
             usage = getattr(chunk, "usage", None)
             if usage and getattr(usage, "total_tokens", None):
                 if hasattr(usage, "model_dump"):

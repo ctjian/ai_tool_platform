@@ -29,6 +29,8 @@ export interface Message {
   images?: string[]
   retry_versions?: string | string[] // 重试版本列表（之前的回复）- JSON字符串或数组
   cost_meta?: any
+  thinking?: string
+  thinking_collapsed?: boolean
   created_at: string
 }
 

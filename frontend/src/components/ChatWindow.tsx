@@ -253,6 +253,7 @@ function ChatWindow() {
       let contentBuffer = ''
       let newContent = '' // 新的回复内容
       let pendingBuffer = ''
+      let thinkingBuffer = ''
       let rafId: number | null = null
       const chunkStep = 6
       const scheduleFlush = () => {
@@ -288,6 +289,7 @@ function ChatWindow() {
           conversation_id: conversationId,
           role: 'assistant' as const,
           content: '__waiting__',
+          thinking_collapsed: true,
           created_at: new Date().toISOString(),
         }
         setMessages((msgs) => [...(Array.isArray(msgs) ? msgs : []), waitingMessage])
@@ -298,6 +300,47 @@ function ChatWindow() {
           // 开始事件，包含message_id
           if (data && typeof data === 'object' && 'message_id' in data) {
             assistantMessageId = (data as any).message_id || assistantMessageId
+          }
+          continue
+        } else if (event === 'thinking') {
+          if (data && typeof data === 'object' && 'content' in data) {
+            const chunk = (data as any).content as string
+            if (assistantCreated && assistantMessageId) {
+              setMessages((msgs) => {
+                const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
+                if (msgIdx >= 0) {
+                  const updatedMsgs = [...msgs]
+                  const prevThinking = (updatedMsgs[msgIdx] as any).thinking || ''
+                  const prevCollapsed = (updatedMsgs[msgIdx] as any).thinking_collapsed
+                  updatedMsgs[msgIdx] = {
+                    ...updatedMsgs[msgIdx],
+                    thinking: prevThinking + chunk,
+                    thinking_collapsed: prevCollapsed ?? true,
+                  }
+                  return updatedMsgs
+                }
+                return msgs
+              })
+            } else {
+              thinkingBuffer += chunk
+              if (waitingMessageId) {
+                setMessages((msgs) => {
+                  const msgIdx = msgs.findIndex(m => m.id === waitingMessageId)
+                  if (msgIdx >= 0) {
+                    const updatedMsgs = [...msgs]
+                    const prevThinking = (updatedMsgs[msgIdx] as any).thinking || ''
+                    const prevCollapsed = (updatedMsgs[msgIdx] as any).thinking_collapsed
+                    updatedMsgs[msgIdx] = {
+                      ...updatedMsgs[msgIdx],
+                      thinking: prevThinking + chunk,
+                      thinking_collapsed: prevCollapsed ?? true,
+                    }
+                    return updatedMsgs
+                  }
+                  return msgs
+                })
+              }
+            }
           }
           continue
         } else if (event === 'token') {
@@ -317,6 +360,8 @@ function ChatWindow() {
                 conversation_id: conversationId,
                 role: 'assistant' as const,
                 content: contentBuffer,
+                thinking: thinkingBuffer || undefined,
+                thinking_collapsed: thinkingBuffer ? true : undefined,
                 created_at: new Date().toISOString(),
               }
               setMessages((msgs) => {
@@ -326,6 +371,7 @@ function ChatWindow() {
               assistantCreated = true
               firstTokenReceived = true
               contentBuffer = ''
+              thinkingBuffer = ''
             } else if (!firstTokenReceived && retryMessageId) {
               // 重试时第一次收到token，清空旧内容，只保留新内容
               firstTokenReceived = true
@@ -387,7 +433,11 @@ function ChatWindow() {
               const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
               if (msgIdx >= 0) {
                 const updatedMsgs = [...msgs]
-                updatedMsgs[msgIdx] = completeMessage
+                const prev = updatedMsgs[msgIdx] as any
+                updatedMsgs[msgIdx] = {
+                  ...completeMessage,
+                  thinking_collapsed: prev?.thinking_collapsed ?? (completeMessage.thinking ? true : undefined),
+                }
                 return updatedMsgs
               }
               return msgs

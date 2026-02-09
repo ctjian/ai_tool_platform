@@ -86,9 +86,11 @@ async def init_db() -> None:
             Conversation.__table__,
             Message.__table__,
         ])
-        # 兼容旧库：补充 messages.cost_meta 列
+        # 兼容旧库：补充 messages.cost_meta / messages.thinking 列
         result = await conn.exec_driver_sql("PRAGMA table_info(messages)")
         columns = [row[1] for row in result.fetchall()]
         if "cost_meta" not in columns:
             await conn.exec_driver_sql("ALTER TABLE messages ADD COLUMN cost_meta TEXT")
+        if "thinking" not in columns:
+            await conn.exec_driver_sql("ALTER TABLE messages ADD COLUMN thinking TEXT")
         print("✅ 对话历史数据库表创建成功")

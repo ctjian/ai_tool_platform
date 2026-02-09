@@ -27,7 +27,7 @@ export const ToolsExplorer = () => {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedTool, setSelectedTool] = useState<Tool | null>(null);
-  const { setCurrentTool, setConversations } = useAppStore();
+  const { setCurrentTool, setConversations, setTools: setStoreTools, tools: storeTools, currentTool } = useAppStore();
 
   useEffect(() => {
     loadData();
@@ -94,10 +94,18 @@ export const ToolsExplorer = () => {
 
   const handleSavePrompt = async (prompt: string) => {
     if (!selectedTool) return;
-    // 这里可以调用后端API来保存提示词
-    // 暂时只在前端更新
-    console.log('Saving prompt for tool:', selectedTool.id, prompt);
-    // 如果有后端API，可以在这里调用
+    const res = await apiClient.updateTool(selectedTool.id, { system_prompt: prompt });
+    const updated = res.data;
+    setTools((prev) =>
+      prev.map((t) => (t.id === updated.id ? { ...t, system_prompt: updated.system_prompt } : t))
+    );
+    setSelectedTool((prev) => (prev ? { ...prev, system_prompt: updated.system_prompt } : prev));
+    setStoreTools(
+      storeTools.map((t) => (t.id === updated.id ? { ...t, system_prompt: updated.system_prompt } : t))
+    );
+    if (currentTool?.id === updated.id) {
+      setCurrentTool({ ...currentTool, system_prompt: updated.system_prompt } as any);
+    }
   };
 
   if (loading) return <Loading />;

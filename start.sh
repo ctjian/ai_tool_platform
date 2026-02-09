@@ -33,7 +33,7 @@ pip install -q -r requirements.txt
 
 # 初始化数据库
 echo "初始化数据库..."
-python scripts/init_db.py
+python scripts/init_db_no_tools.py
 
 # 启动后端
 echo -e "${GREEN}✓ 后端启动完成${NC}"

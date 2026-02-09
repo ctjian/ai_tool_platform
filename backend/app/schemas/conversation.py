@@ -1,5 +1,5 @@
 """会话相关的Pydantic schemas"""
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 
@@ -18,15 +18,15 @@ class MessageCreate(MessageBase):
 
 class MessageResponse(MessageBase):
     """消息响应"""
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     conversation_id: str
     created_at: datetime
     retry_versions: Optional[List[str]] = Field(None, description="重试版本列表（之前的回复）")
     cost_meta: Optional[dict] = Field(None, description="计费信息")
+    thinking: Optional[str] = Field(None, description="模型思考内容")
     
-    class Config:
-        from_attributes = True
-
     @field_validator("cost_meta", mode="before")
     @classmethod
     def parse_cost_meta(cls, v):
@@ -61,19 +61,20 @@ class ConversationUpdate(BaseModel):
 
 class ConversationResponse(BaseModel):
     """会话响应（不含消息）"""
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     tool_id: Optional[str]
     title: str
     created_at: datetime
     updated_at: datetime
     message_count: int = Field(default=0, description="消息数量")
-    
-    class Config:
-        from_attributes = True
 
 
 class ConversationDetailResponse(ConversationResponse):
     """会话详情响应（含消息）"""
+    model_config = ConfigDict(from_attributes=True)
+
     messages: list[MessageResponse] = Field(default_factory=list)
 
 

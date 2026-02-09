@@ -1,6 +1,7 @@
 """会话管理API"""
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
+import os
 from typing import List, Optional, Dict, Any
 import json
 
@@ -19,6 +20,7 @@ from app.schemas.conversation import (
 from app.utils.openai_helper import generate_title_for_conversation
 
 router = APIRouter()
+DEBUG_THINKING = os.getenv("DEBUG_THINKING") == "1"
 
 
 @router.get("/conversations", response_model=ConversationListResponse)
@@ -59,6 +61,14 @@ async def get_conversation(
     conversation = await conversation_crud.get(db, conversation_id, with_messages=True)
     if not conversation:
         raise HTTPException(status_code=404, detail="会话不存在")
+
+    if DEBUG_THINKING:
+        thinking_msgs = [m for m in conversation.messages if getattr(m, "thinking", None)]
+        sample_len = len(thinking_msgs[0].thinking) if thinking_msgs else 0
+        print(
+            f"[thinking] conv={conversation_id} total={len(conversation.messages)} "
+            f"thinking_msgs={len(thinking_msgs)} sample_len={sample_len}"
+        )
     
     # 构建响应
     messages = []
@@ -86,6 +96,8 @@ async def get_conversation(
                 content=msg.content,
                 images=images,
                 retry_versions=retry_versions,
+                cost_meta=msg.cost_meta,
+                thinking=msg.thinking,
                 created_at=msg.created_at
             )
         )

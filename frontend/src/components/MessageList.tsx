@@ -20,7 +20,7 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
   ({ messages, onRetry }, ref) => {
     const [copiedId, setCopiedId] = useState<string | null>(null)
     const [previewImage, setPreviewImage] = useState<string | null>(null)
-    const { versionIndices, setVersionIndices } = useAppStore()
+    const { versionIndices, setVersionIndices, setMessages } = useAppStore()
 
     const handleCopy = async (content: string, msgId: string) => {
       try {
@@ -238,6 +238,9 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
               const rawContent = getMessageContent(msg)
               const { text: displayContent, cost } = extractCostMeta(rawContent, msg.cost_meta)
               const isWaiting = msg.role === 'assistant' && displayContent === '__waiting__'
+              const hasThinking = msg.role === 'assistant' && (msg.thinking && msg.thinking.trim().length > 0)
+              const showThinking = msg.role === 'assistant' && (hasThinking || isWaiting)
+              const thinkingCollapsed = msg.thinking_collapsed ?? true
               
               return (
               <div key={msg.id} className="flex flex-col">
@@ -274,11 +277,39 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
                     <div className="flex justify-start">
                     <div className="max-w-full group relative">
                       <div className="text-gray-800">
-                        {isWaiting ? (
-                          <div className="dot-pulse text-gray-400 text-lg">
-                            <span>.</span><span>.</span><span>.</span>
-                          </div>
-                        ) : (
+                        {showThinking && (
+                          <details
+                            className="mt-2 text-xs text-gray-500"
+                            open={!thinkingCollapsed}
+                            onToggle={(e) => {
+                              const open = (e.currentTarget as HTMLDetailsElement).open
+                              setMessages((msgs) =>
+                                msgs.map((m) =>
+                                  m.id === msg.id
+                                    ? { ...m, thinking_collapsed: !open }
+                                    : m
+                                )
+                              )
+                            }}
+                          >
+                            <summary className="thinking-summary cursor-pointer select-none flex items-center gap-1">
+                              <span className="thinking-text">正在思考</span>
+                              <span className="thinking-caret">›</span>
+                            </summary>
+                            {hasThinking && (
+                              <div className="mt-2 rounded-md border-l-4 border-gray-200 bg-gray-50 px-3 py-2 text-gray-700">
+                                <ReactMarkdown
+                                  remarkPlugins={[remarkGfm, remarkMath]}
+                                  rehypePlugins={[rehypeKatex]}
+                                  components={markdownComponents}
+                                >
+                                  {convertLatexDelimiters(msg.thinking || '')}
+                                </ReactMarkdown>
+                              </div>
+                            )}
+                          </details>
+                        )}
+                        {!isWaiting && (
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm, remarkMath]}
                             rehypePlugins={[rehypeKatex]}

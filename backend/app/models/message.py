@@ -17,6 +17,7 @@ class Message(Base):
     images = Column(Text, nullable=True, default=None)  # JSON array of base64 images
     retry_versions = Column(Text, nullable=True, default=None)  # JSON array of previous assistant responses (for retry functionality)
     cost_meta = Column(Text, nullable=True, default=None)  # JSON string for cost metadata
+    thinking = Column(Text, nullable=True, default=None)  # Model thinking/reasoning content
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     
     # 关系

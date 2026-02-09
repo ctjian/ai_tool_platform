@@ -51,6 +51,31 @@ code {
 .dot-pulse span:nth-child(2) { animation-delay: 0.2s; }
 .dot-pulse span:nth-child(3) { animation-delay: 0.4s; }
 
+/* 思考中指示器 */
+.thinking-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.thinking-caret {
+  display: inline-block;
+  animation: thinking-caret 1s infinite;
+}
+
+.thinking-summary::-webkit-details-marker {
+  display: none;
+}
+
+.thinking-summary::marker {
+  content: '';
+}
+
+@keyframes thinking-caret {
+  0%, 60%, 100% { opacity: 0.2; transform: translateX(0); }
+  30% { opacity: 1; transform: translateX(3px); }
+}
+
 /* 消息样式 */
 .message-user {
   @apply bg-blue-100 text-gray-900;

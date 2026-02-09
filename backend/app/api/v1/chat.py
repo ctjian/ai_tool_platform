@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import AsyncGenerator, Optional, Dict
+import os
 import json
 
 from app.database import get_session, get_chat_session
@@ -16,6 +17,7 @@ router = APIRouter()
 
 # 全局字典存储正在进行的流式请求（用于停止功能）
 active_streams = {}
+DEBUG_THINKING = os.getenv("DEBUG_THINKING") == "1"
 
 
 
@@ -175,6 +177,7 @@ async def generate_chat_stream(
             yield f"event: error\ndata: {error_data}\n\n"
             return
         full_response = ""
+        thinking_response = ""
         usage_data: Optional[Dict] = None
         active_streams[conversation_id] = True
         
@@ -191,6 +194,15 @@ async def generate_chat_stream(
             
             if event.get("type") == "usage":
                 usage_data = event.get("usage")
+                continue
+            
+            if event.get("type") == "thinking":
+                thinking_chunk = event.get("content", "")
+                thinking_response += thinking_chunk
+                thinking_data = json.dumps({"content": thinking_chunk})
+                yield f"event: thinking\ndata: {thinking_data}\n\n"
+                if DEBUG_THINKING and thinking_chunk:
+                    print(f"[thinking] chunk_len={len(thinking_chunk)} total_len={len(thinking_response)}")
                 continue
             
             if event.get("type") != "token":
@@ -213,6 +225,13 @@ async def generate_chat_stream(
                         completion_tokens,
                     )
             cost_meta_json = json.dumps(cost_meta, ensure_ascii=False) if cost_meta else None
+            thinking_text = thinking_response if thinking_response else None
+            if DEBUG_THINKING:
+                print(
+                    f"[thinking] done model={api_config.model} "
+                    f"thinking_len={len(thinking_response)} "
+                    f"has_usage={bool(usage_data)}"
+                )
 
             assistant_msg = None
             if retry_message_id:
@@ -233,6 +252,7 @@ async def generate_chat_stream(
                     # 更新消息：新内容作为当前content，旧内容存入retry_versions
                     update_msg.content = full_response
                     update_msg.cost_meta = cost_meta_json
+                    update_msg.thinking = thinking_text
                     update_msg.retry_versions = json.dumps(retry_versions)
                     await message_crud.update(chat_db, retry_message_id, update_msg)
                     assistant_msg = update_msg
@@ -244,6 +264,7 @@ async def generate_chat_stream(
                     "assistant",
                     full_response,
                     cost_meta=cost_meta_json,
+                    thinking=thinking_text,
                 )
             
             # 发送完成事件 - 包含完整的消息对象
@@ -260,6 +281,7 @@ async def generate_chat_stream(
                     "content": assistant_msg.content,
                     "retry_versions": assistant_msg.retry_versions,
                     "cost_meta": cost_meta,
+                    "thinking": assistant_msg.thinking,
                     "created_at": assistant_msg.created_at.isoformat() if assistant_msg.created_at else None,
                 }
             

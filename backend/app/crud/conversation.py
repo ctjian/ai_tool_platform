@@ -146,6 +146,7 @@ class CRUDMessage:
         content: str,
         images: Optional[str] = None,
         cost_meta: Optional[str] = None,
+        thinking: Optional[str] = None,
     ) -> Message:
         """创建消息"""
         message_id = str(uuid.uuid4())
@@ -157,6 +158,7 @@ class CRUDMessage:
             content=content,
             images=images,
             cost_meta=cost_meta,
+            thinking=thinking,
         )
         db.add(db_obj)
         
@@ -182,7 +184,7 @@ class CRUDMessage:
             return None
         
         # 更新所有属性
-        for field in ['content', 'retry_versions', 'role', 'images', 'cost_meta']:
+        for field in ['content', 'retry_versions', 'role', 'images', 'cost_meta', 'thinking']:
             if hasattr(obj_in, field):
                 setattr(db_obj, field, getattr(obj_in, field))
         
