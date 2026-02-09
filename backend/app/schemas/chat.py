@@ -25,9 +25,9 @@ class ChatRequest(BaseModel):
     api_config: APIConfig = Field(..., description="API配置")
     context_rounds: Optional[int] = Field(
         None,
-        ge=1,
+        ge=0,
         le=20,
-        description="上下文轮数（保留最近N轮用户对话）",
+        description="上下文轮数（保留最近N轮用户对话，0表示不携带历史）",
     )
     retry_message_id: Optional[str] = Field(None, description="重试的消息ID（如果是重试操作）")
     selected_versions: Optional[Dict[str, int]] = Field(None, description="每条消息选中的版本索引（message_id -> version_index）")

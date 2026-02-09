@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Send, Loader, Plus, X, Image as ImageIcon } from 'lucide-react'
+import { Send, Plus, X, Square } from 'lucide-react'
 
 interface ImageFile {
   file: File
@@ -11,6 +11,7 @@ interface ChatInputProps {
   value: string
   onChange: (value: string) => void
   onSend: () => void
+  onStop?: () => void
   disabled?: boolean
   loading?: boolean
   images?: ImageFile[]
@@ -21,6 +22,7 @@ function ChatInput({
   value,
   onChange,
   onSend,
+  onStop,
   disabled = false,
   loading = false,
   images = [],
@@ -65,7 +67,7 @@ function ChatInput({
     }
   }
 
-  const handlePaste = async (e: React.ClipboardEvent) => {
+  const handlePaste = (e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items
     if (!items) return
 
@@ -75,13 +77,13 @@ function ChatInput({
         e.preventDefault()
         const file = item.getAsFile()
         if (file) {
-          await addImageFile(file)
+          addImageFile(file)
         }
       }
     }
   }
 
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files) return
 
@@ -90,7 +92,7 @@ function ChatInput({
         alert('最多只能上传5张图片')
         break
       }
-      await addImageFile(files[i])
+      addImageFile(files[i])
     }
 
     // 清空 input 值，允许重复选择同一文件
@@ -99,7 +101,7 @@ function ChatInput({
     }
   }
 
-  const addImageFile = async (file: File) => {
+  const addImageFile = (file: File) => {
     if (images.length >= 5) {
       alert('最多只能上传5张图片')
       return
@@ -197,15 +199,24 @@ function ChatInput({
               style={{ minHeight: '40px', maxHeight: '200px' }}
             />
             <button
-              onClick={onSend}
-              disabled={disabled || loading || (!value.trim() && images.length === 0)}
-              className="absolute right-0 top-1/2 -translate-y-1/2 flex items-center justify-center bg-gray-800 text-white w-10 h-10 rounded-full hover:bg-gray-900 transition disabled:opacity-30 disabled:cursor-not-allowed"
+              onClick={() => {
+                if (loading && onStop) {
+                  onStop()
+                } else {
+                  onSend()
+                }
+              }}
+              disabled={
+                !loading &&
+                (disabled || (!value.trim() && images.length === 0))
+              }
+              className={`absolute right-0 top-1/2 -translate-y-1/2 flex items-center justify-center w-10 h-10 rounded-full transition ${
+                loading
+                  ? 'bg-red-500 hover:bg-red-600 text-white'
+                  : 'bg-gray-800 hover:bg-gray-900 text-white'
+              } disabled:opacity-30 disabled:cursor-not-allowed`}
             >
-              {loading ? (
-                <Loader size={18} className="animate-spin" />
-              ) : (
-                <Send size={18} />
-              )}
+              {loading ? <Square size={18} /> : <Send size={18} />}
             </button>
           </div>
         </div>

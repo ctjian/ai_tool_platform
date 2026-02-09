@@ -90,12 +90,24 @@ async def generate_chat_stream(
         # 过滤 system 消息（避免重复传入）
         messages_history = [m for m in messages_history if m.role != "system"]
 
-        if context_rounds:
+        if context_rounds is not None:
             # 保留最近N轮（以用户消息为轮次起点）
-            user_indices = [i for i, msg in enumerate(messages_history) if msg.role == "user"]
-            if len(user_indices) > context_rounds:
-                start_idx = user_indices[-context_rounds]
-                messages_history = messages_history[start_idx:]
+            if context_rounds <= 0:
+                if retry_message_id:
+                    # 重试时至少保留最近一条用户消息作为提示
+                    last_user_idx = None
+                    for i in range(len(messages_history) - 1, -1, -1):
+                        if messages_history[i].role == "user":
+                            last_user_idx = i
+                            break
+                    messages_history = messages_history[last_user_idx:] if last_user_idx is not None else []
+                else:
+                    messages_history = []
+            else:
+                user_indices = [i for i, msg in enumerate(messages_history) if msg.role == "user"]
+                if len(user_indices) > context_rounds:
+                    start_idx = user_indices[-context_rounds]
+                    messages_history = messages_history[start_idx:]
         
         # 4. 构建OpenAI消息格式
         openai_messages = [

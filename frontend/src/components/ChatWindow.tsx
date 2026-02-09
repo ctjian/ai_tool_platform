@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useAppStore } from '../store/app'
 import apiClient from '../api/client'
 import MessageList from './MessageList'
 import ChatInput from './ChatInput'
-import { Plus, Download, Square, ChevronDown, Check, FileText, X, Copy } from 'lucide-react'
+import { Plus, Download, ChevronDown, Check, FileText, X, Copy, AlertCircle } from 'lucide-react'
 import { addToast } from './ui'
 import { Message } from '../types/api'
 
@@ -92,20 +92,88 @@ function ChatWindow() {
     return idx * itemHeight + listPaddingTop
   }, [availableModelGroups, selectedVendor])
   const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const isStreamingRef = useRef(false)
+  const autoScrollPausedRef = useRef(false)
+  const lastScrollTopRef = useRef(0)
+  const isProgrammaticScrollRef = useRef(false)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const sendMessageRef = useRef<
+    | ((
+        messageContent: string,
+        imageDataList: string[],
+        options?: { skipInputReset?: boolean; autoTitle?: boolean; retryMessageId?: string }
+      ) => Promise<void>)
+    | null
+  >(null)
   const hasVisibleMessages = useMemo(
     () => messages.some((m) => m.role !== 'system'),
     [messages]
   )
 
   useEffect(() => {
+    isStreamingRef.current = isStreaming
+  }, [isStreaming])
+
+  useEffect(() => {
     const container = messagesContainerRef.current
     if (!container) return
+    const handleScroll = () => {
+      const threshold = 80
+      const currentTop = container.scrollTop
+      const distanceToBottom = container.scrollHeight - currentTop - container.clientHeight
+      const atBottom = distanceToBottom < threshold
+      const delta = currentTop - lastScrollTopRef.current
+      const scrollingUp = delta < 0
+      const scrollingDown = delta > 0
+
+      // 向上滚动永远认为是用户意图（即使此时程序也在滚动）
+      if (scrollingUp && isStreamingRef.current) {
+        autoScrollPausedRef.current = true
+      }
+
+      if (!isProgrammaticScrollRef.current) {
+        if (isStreamingRef.current) {
+          if (scrollingDown && atBottom) {
+            // 用户向下滚动回到底部，恢复自动滚动
+            autoScrollPausedRef.current = false
+          }
+        } else if (atBottom) {
+          // 非流式时，始终允许自动滚动到底部
+          autoScrollPausedRef.current = false
+        }
+      }
+
+      lastScrollTopRef.current = currentTop
+    }
+    const handleWheel = (e: WheelEvent) => {
+      if (!isStreamingRef.current) return
+      if (e.deltaY < 0) {
+        // 贴底时滚轮上滑可能几乎不改变 scrollTop，这里直接按用户意图暂停跟随
+        autoScrollPausedRef.current = true
+      }
+    }
+    handleScroll()
+    container.addEventListener('scroll', handleScroll, { passive: true })
+    container.addEventListener('wheel', handleWheel, { passive: true })
+    return () => {
+      container.removeEventListener('scroll', handleScroll)
+      container.removeEventListener('wheel', handleWheel)
+    }
+  }, [hasVisibleMessages, currentConversation?.id])
+
+  useEffect(() => {
+    const container = messagesContainerRef.current
+    if (!container) return
+    if (autoScrollPausedRef.current) return
+    isProgrammaticScrollRef.current = true
     container.scrollTo({
       top: container.scrollHeight,
-      behavior: 'smooth',
+      behavior: isStreaming ? 'auto' : 'smooth',
     })
-  }, [messages])
+    requestAnimationFrame(() => {
+      isProgrammaticScrollRef.current = false
+    })
+  }, [messages, isStreaming])
 
   useEffect(() => {
     if (promptPanelOpen) return
@@ -207,6 +275,9 @@ function ChatWindow() {
       setIsStreaming(false)
       setChatLoading(false)
       addToast('已停止生成', 'info')
+      if (currentConversation?.id) {
+        apiClient.stopChat(currentConversation.id).catch(() => {})
+      }
     }
   }
 
@@ -267,20 +338,18 @@ function ChatWindow() {
       return
     }
 
-    // 对于工具对话，需要有currentTool；对于通用对话，则不需要强制要求有currentConversation，因为我们会自动创建
-    if (currentTool && !currentConversation) {
-      // 如果是在工具模式下，但没有对话（比如刚切换工具），可以继续，因为会创建新对话
-    } else if (!currentTool && !currentConversation) {
-      // 如果是通用聊天模式，且没有对话，也可以继续
-    } else if (chatLoading) {
-      return;
-    }
-
     const shouldAutoTitle = options?.autoTitle ?? false
     const retryMessageId = options?.retryMessageId
 
     let waitingMessageId: string | null = null
     let conversationId: string | null = currentConversation?.id || null
+    let flushTimer: number | null = null
+    const stopFlush = () => {
+      if (flushTimer !== null) {
+        clearInterval(flushTimer)
+        flushTimer = null
+      }
+    }
     try {
       setChatLoading(true)
 
@@ -320,6 +389,8 @@ function ChatWindow() {
 
       // 调用聊天API - 使用完整的API配置
       setIsStreaming(true)
+      const controller = new AbortController()
+      abortControllerRef.current = controller
       const response = await apiClient.chat({
         conversation_id: conversationId,
         tool_id: currentTool?.id ?? null,
@@ -338,41 +409,53 @@ function ChatWindow() {
         },
         retry_message_id: retryMessageId,
         selected_versions: versionIndices,
-      })
+      }, controller.signal)
 
       // 处理流式SSE响应 - 使用缓冲区减少重新渲染
       let assistantMessageId = retryMessageId || ''
       let assistantCreated = !!retryMessageId // 只有重试时才认为已创建（不需要创建新消息）
-      let contentBuffer = ''
-      let newContent = '' // 新的回复内容
-      let pendingBuffer = ''
       let thinkingBuffer = ''
-      let rafId: number | null = null
-      const chunkStep = 6
-      const scheduleFlush = () => {
-        if (rafId !== null) return
-        const tick = () => {
-          rafId = null
-          if (!pendingBuffer) return
-          const chunk = pendingBuffer.slice(0, chunkStep)
-          pendingBuffer = pendingBuffer.slice(chunkStep)
-          setMessages((msgs) => {
-            const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
-            if (msgIdx >= 0) {
-              const updatedMsgs = [...msgs]
-              updatedMsgs[msgIdx] = {
-                ...updatedMsgs[msgIdx],
-                content: updatedMsgs[msgIdx].content + chunk,
-              }
-              return updatedMsgs
-            }
-            return msgs
-          })
-          if (pendingBuffer) {
-            rafId = requestAnimationFrame(tick)
-          }
+      let pendingContent = ''
+      let pendingThinking = ''
+      const flushIntervalMs = 50
+      const contentChunkSize = 24
+      const thinkingChunkSize = 48
+      const flushBuffers = (forceAll: boolean) => {
+        if (!pendingContent && !pendingThinking) {
+          if (forceAll) stopFlush()
+          return
         }
-        rafId = requestAnimationFrame(tick)
+        const contentChunk = forceAll ? pendingContent : pendingContent.slice(0, contentChunkSize)
+        const thinkingChunk = forceAll ? pendingThinking : pendingThinking.slice(0, thinkingChunkSize)
+        pendingContent = pendingContent.slice(contentChunk.length)
+        pendingThinking = pendingThinking.slice(thinkingChunk.length)
+        if (!contentChunk && !thinkingChunk) return
+        setMessages((msgs) => {
+          const targetId = assistantCreated ? assistantMessageId : waitingMessageId
+          if (!targetId) return msgs
+          const msgIdx = msgs.findIndex(m => m.id === targetId)
+          if (msgIdx < 0) return msgs
+          const updatedMsgs = [...msgs]
+          const prev = updatedMsgs[msgIdx] as any
+          const next: any = { ...prev }
+          if (contentChunk) {
+            next.content = (prev.content || '') + contentChunk
+          }
+          if (thinkingChunk) {
+            next.thinking = (prev.thinking || '') + thinkingChunk
+            next.thinking_collapsed = prev.thinking_collapsed ?? true
+            next.thinking_done = false
+          }
+          updatedMsgs[msgIdx] = next
+          return updatedMsgs
+        })
+        if (!pendingContent && !pendingThinking) {
+          stopFlush()
+        }
+      }
+      const startFlush = () => {
+        if (flushTimer !== null) return
+        flushTimer = window.setInterval(() => flushBuffers(false), flushIntervalMs)
       }
       let firstTokenReceived = false // 标记是否接收到第一个token
       if (!retryMessageId) {
@@ -399,52 +482,15 @@ function ChatWindow() {
         } else if (event === 'thinking') {
           if (data && typeof data === 'object' && 'content' in data) {
             const chunk = (data as any).content as string
-            if (assistantCreated && assistantMessageId) {
-              setMessages((msgs) => {
-                const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
-                if (msgIdx >= 0) {
-                  const updatedMsgs = [...msgs]
-                  const prevThinking = (updatedMsgs[msgIdx] as any).thinking || ''
-                  const prevCollapsed = (updatedMsgs[msgIdx] as any).thinking_collapsed
-                  updatedMsgs[msgIdx] = {
-                    ...updatedMsgs[msgIdx],
-                    thinking: prevThinking + chunk,
-                    thinking_collapsed: prevCollapsed ?? true,
-                    thinking_done: false,
-                  }
-                  return updatedMsgs
-                }
-                return msgs
-              })
-            } else {
-              thinkingBuffer += chunk
-              if (waitingMessageId) {
-                setMessages((msgs) => {
-                  const msgIdx = msgs.findIndex(m => m.id === waitingMessageId)
-                  if (msgIdx >= 0) {
-                    const updatedMsgs = [...msgs]
-                    const prevThinking = (updatedMsgs[msgIdx] as any).thinking || ''
-                    const prevCollapsed = (updatedMsgs[msgIdx] as any).thinking_collapsed
-                    updatedMsgs[msgIdx] = {
-                      ...updatedMsgs[msgIdx],
-                      thinking: prevThinking + chunk,
-                      thinking_collapsed: prevCollapsed ?? true,
-                      thinking_done: false,
-                    }
-                    return updatedMsgs
-                  }
-                  return msgs
-                })
-              }
-            }
+            thinkingBuffer += chunk
+            pendingThinking += chunk
+            startFlush()
           }
           continue
         } else if (event === 'token') {
           // token 事件 - 来自后端的实际内容
           if (data && typeof data === 'object' && 'content' in data) {
             const token = (data as any).content
-            contentBuffer += token
-            newContent += token
 
             // 第一次收到内容时，创建或更新助手消息
             if (!assistantCreated) {
@@ -455,7 +501,7 @@ function ChatWindow() {
                 id: assistantMessageId,
                 conversation_id: conversationId,
                 role: 'assistant' as const,
-                content: contentBuffer,
+                content: token,
                 thinking: thinkingBuffer || undefined,
                 thinking_collapsed: thinkingBuffer ? true : undefined,
                 thinking_done: thinkingBuffer ? false : true,
@@ -467,8 +513,8 @@ function ChatWindow() {
               })
               assistantCreated = true
               firstTokenReceived = true
-              contentBuffer = ''
               thinkingBuffer = ''
+              pendingThinking = ''
             } else if (!firstTokenReceived && retryMessageId) {
               // 重试时第一次收到token，清空旧内容，只保留新内容
               firstTokenReceived = true
@@ -478,50 +524,31 @@ function ChatWindow() {
                   const updatedMsgs = [...msgs]
                   updatedMsgs[msgIdx] = {
                     ...updatedMsgs[msgIdx],
-                    content: contentBuffer, // 替换而不是追加
+                    content: token, // 替换而不是追加
+                    thinking: thinkingBuffer || '',
+                    thinking_collapsed: thinkingBuffer ? true : updatedMsgs[msgIdx].thinking_collapsed,
+                    thinking_done: thinkingBuffer ? false : updatedMsgs[msgIdx].thinking_done,
                   }
                   return updatedMsgs
                 }
                 return msgs
               })
-              contentBuffer = ''
+              thinkingBuffer = ''
+              pendingThinking = ''
             } else {
               // 追加到待刷新缓冲区，按固定步长匀速输出
-              pendingBuffer += token
-              scheduleFlush()
+              pendingContent += token
+              startFlush()
             }
           }
         } else if (event === 'done') {
-          // 最后的缓冲内容
-          if (contentBuffer && assistantCreated) {
-            setMessages((msgs) => {
-              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
-              if (msgIdx >= 0) {
-                const updatedMsgs = [...msgs]
-                updatedMsgs[msgIdx] = {
-                  ...updatedMsgs[msgIdx],
-                  content: updatedMsgs[msgIdx].content + contentBuffer,
-                }
-                return updatedMsgs
-              }
-              return msgs
-            })
-          }
-          if (pendingBuffer && assistantCreated) {
-            setMessages((msgs) => {
-              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
-              if (msgIdx >= 0) {
-                const updatedMsgs = [...msgs]
-                updatedMsgs[msgIdx] = {
-                  ...updatedMsgs[msgIdx],
-                  content: updatedMsgs[msgIdx].content + pendingBuffer,
-                }
-                return updatedMsgs
-              }
-              return msgs
-            })
-            pendingBuffer = ''
-          }
+          // 最后把剩余内容快速刷完
+          flushBuffers(true)
+          pendingContent = ''
+          pendingThinking = ''
+          stopFlush()
+          setIsStreaming(false)
+          setChatLoading(false)
           
           // 如果后端返回了完整的消息对象（包含retry_versions），用它更新消息
           if (data && typeof data === 'object' && 'message' in data) {
@@ -571,35 +598,12 @@ function ChatWindow() {
           break
         } else if (event === 'stopped') {
           // 停止事件 - 也需要刷新缓冲区
-          if (contentBuffer && assistantCreated) {
-            setMessages((msgs) => {
-              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
-              if (msgIdx >= 0) {
-                const updatedMsgs = [...msgs]
-                updatedMsgs[msgIdx] = {
-                  ...updatedMsgs[msgIdx],
-                  content: updatedMsgs[msgIdx].content + contentBuffer,
-                }
-                return updatedMsgs
-              }
-              return msgs
-            })
-          }
-          if (pendingBuffer && assistantCreated) {
-            setMessages((msgs) => {
-              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
-              if (msgIdx >= 0) {
-                const updatedMsgs = [...msgs]
-                updatedMsgs[msgIdx] = {
-                  ...updatedMsgs[msgIdx],
-                  content: updatedMsgs[msgIdx].content + pendingBuffer,
-                }
-                return updatedMsgs
-              }
-              return msgs
-            })
-            pendingBuffer = ''
-          }
+          flushBuffers(true)
+          pendingContent = ''
+          pendingThinking = ''
+          stopFlush()
+          setIsStreaming(false)
+          setChatLoading(false)
           if (waitingMessageId) {
             setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
           }
@@ -616,21 +620,12 @@ function ChatWindow() {
           if (data && typeof data === 'object' && 'error' in data) {
             throw new Error((data as any).error)
           }
-          if (pendingBuffer && assistantCreated) {
-            setMessages((msgs) => {
-              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
-              if (msgIdx >= 0) {
-                const updatedMsgs = [...msgs]
-                updatedMsgs[msgIdx] = {
-                  ...updatedMsgs[msgIdx],
-                  content: updatedMsgs[msgIdx].content + pendingBuffer,
-                }
-                return updatedMsgs
-              }
-              return msgs
-            })
-            pendingBuffer = ''
-          }
+          flushBuffers(true)
+          pendingContent = ''
+          pendingThinking = ''
+          stopFlush()
+          setIsStreaming(false)
+          setChatLoading(false)
           if (waitingMessageId) {
             setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
           }
@@ -684,6 +679,14 @@ function ChatWindow() {
           })
       }
     } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        if (waitingMessageId) {
+          setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
+        }
+        stopFlush()
+        setIsStreaming(false)
+        return
+      }
       console.error('Failed to send message:', error)
       if (waitingMessageId) {
         setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
@@ -706,9 +709,15 @@ function ChatWindow() {
       addToast('发送失败，请重试', 'error')
       setIsStreaming(false) // 确保错误时也停止流式传输状态
     } finally {
+      stopFlush()
       setChatLoading(false)
+      abortControllerRef.current = null
     }
   }
+
+  useEffect(() => {
+    sendMessageRef.current = sendMessageWithPayload
+  }, [sendMessageWithPayload])
 
   // 发送消息
   const handleSendMessage = async () => {
@@ -733,7 +742,7 @@ function ChatWindow() {
     })
   }
 
-  const handleRetryMessage = async (assistantMessageId: string) => {
+  const handleRetryMessage = useCallback(async (assistantMessageId: string) => {
     if (chatLoading) return
     const idx = messages.findIndex(m => m.id === assistantMessageId)
     if (idx <= 0) return
@@ -770,12 +779,12 @@ function ChatWindow() {
     })
 
     // 发送消息，但标记为重试（会替换而不是新增消息）
-    await sendMessageWithPayload(userMsg.content, userMsg.images || [], {
+    await sendMessageRef.current?.(userMsg.content, userMsg.images || [], {
       skipInputReset: true,
       autoTitle: false,
       retryMessageId: assistantMessageId,  // 传递要替换的消息ID
     })
-  }
+  }, [messages, chatLoading, versionIndices])
 
   return (
     <div className="flex-1 flex flex-col bg-white text-gray-900 h-full overflow-hidden relative min-h-0">
@@ -890,10 +899,18 @@ function ChatWindow() {
               onChange={(e) => setContextRounds(parseInt(e.target.value, 10))}
               className="text-xs border border-gray-200 rounded-md px-2 py-1 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-gray-300"
             >
-              {Array.from({ length: 20 }, (_, i) => 1 + i).map((n) => (
+              {Array.from({ length: 21 }, (_, i) => i).map((n) => (
                 <option key={n} value={n}>{n}</option>
               ))}
             </select>
+            <button
+              type="button"
+              className="text-gray-400 hover:text-gray-600 cursor-help"
+              title="0=不带历史（仅发送当前消息）"
+              aria-label="0=不带历史（仅发送当前消息）"
+            >
+              <AlertCircle size={14} />
+            </button>
           </div>
           {currentTool && (
             <button
@@ -912,15 +929,6 @@ function ChatWindow() {
             <Download size={18} />
             导出
           </button>
-          {isStreaming && (
-            <button
-              onClick={handleStopGeneration}
-              className="flex items-center gap-2 px-3 py-2 bg-red-500 text-white hover:bg-red-600 rounded-lg transition text-sm"
-            >
-              <Square size={16} fill="currentColor" />
-              停止
-            </button>
-          )}
         </div>
       </div>
 
@@ -934,6 +942,7 @@ function ChatWindow() {
               value={inputValue}
               onChange={setInputValue}
               onSend={handleSendMessage}
+              onStop={handleStopGeneration}
               disabled={chatLoading}
               loading={chatLoading}
               images={images}
@@ -958,6 +967,7 @@ function ChatWindow() {
                 value={inputValue}
                 onChange={setInputValue}
                 onSend={handleSendMessage}
+                onStop={handleStopGeneration}
                 disabled={chatLoading}
                 loading={chatLoading}
                 images={images}

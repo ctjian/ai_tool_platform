@@ -46,13 +46,14 @@ export const apiClient = {
     ),
   
   // 聊天相关 - 使用fetch处理SSE流式响应
-  chat: async (data: ChatRequest) => {
+  chat: async (data: ChatRequest, signal?: AbortSignal) => {
     const response = await fetch(`${API_BASE}/chat/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(data),
+      signal,
     })
     
     if (!response.ok) {

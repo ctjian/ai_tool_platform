@@ -25,7 +25,7 @@ if [ ! -d "venv" ]; then
 fi
 
 # 激活虚拟环境
-source venv/bin/activate || . venv/Scripts/activate
+source venv/bin/activate || . venv/Scripts/activate # ||是表示如果前一个命令失败则执行后一个命令（兼容Windows）
 
 # 安装依赖
 echo "检查依赖..."

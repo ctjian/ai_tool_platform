@@ -83,7 +83,7 @@ export const useAppStore = create<AppState>((set) => ({
   contextRounds: (() => {
     const raw = parseInt(localStorage.getItem('contextRounds') || '5', 10)
     if (Number.isNaN(raw)) return 5
-    return Math.min(20, Math.max(1, raw))
+    return Math.min(20, Math.max(0, raw))
   })(),
   
   setCategories: (categories) => set({ categories }),
@@ -127,7 +127,7 @@ export const useAppStore = create<AppState>((set) => ({
   setHasBackendApiKey: (has) => set({ hasBackendApiKey: has }),
   setVersionIndices: (indices) => set({ versionIndices: indices }),
   setContextRounds: (rounds) => {
-    const clamped = Math.min(20, Math.max(1, rounds))
+    const clamped = Math.min(20, Math.max(0, rounds))
     localStorage.setItem('contextRounds', String(clamped))
     set({ contextRounds: clamped })
   },

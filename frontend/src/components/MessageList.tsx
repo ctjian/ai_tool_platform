@@ -1,4 +1,4 @@
-import React, { forwardRef, useState } from 'react'
+import React, { forwardRef, useMemo, useState } from 'react'
 import { Message } from '../types/api'
 import { useAppStore } from '../store/app'
 import ReactMarkdown from 'react-markdown'
@@ -16,7 +16,7 @@ interface MessageListProps {
   onRetry?: (assistantMessageId: string) => void
 }
 
-const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
+const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
   ({ messages, onRetry }, ref) => {
     const [copiedId, setCopiedId] = useState<string | null>(null)
     const [previewImage, setPreviewImage] = useState<string | null>(null)
@@ -56,19 +56,23 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     }
 
     // 获取消息的显示内容（考虑版本选择）
+    const parseRetryVersions = (retryVersions: Message['retry_versions']): string[] => {
+      if (!retryVersions) return []
+      try {
+        // retry_versions 可能是JSON字符串或数组
+        if (typeof retryVersions === 'string') {
+          return JSON.parse(retryVersions)
+        }
+        return retryVersions
+      } catch {
+        return []
+      }
+    }
+
     const getMessageContent = (msg: Message): string => {
       if (msg.role === 'assistant' && msg.retry_versions) {
-        let versions: string[] = []
-        try {
-          // retry_versions 可能是JSON字符串或数组
-          if (typeof msg.retry_versions === 'string') {
-            versions = JSON.parse(msg.retry_versions)
-          } else {
-            versions = msg.retry_versions
-          }
-        } catch {
-          return msg.content
-        }
+        const versions = parseRetryVersions(msg.retry_versions)
+        if (versions.length === 0) return msg.content
         
         const selectedVersion = versionIndices[msg.id] ?? 0
         if (selectedVersion === 0) {
@@ -102,17 +106,7 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     // 获取版本总数
     const getTotalVersions = (msg: Message): number => {
       if (msg.role === 'assistant' && msg.retry_versions) {
-        let versions: string[] = []
-        try {
-          // retry_versions 可能是JSON字符串或数组
-          if (typeof msg.retry_versions === 'string') {
-            versions = JSON.parse(msg.retry_versions)
-          } else {
-            versions = msg.retry_versions
-          }
-        } catch {
-          return 0
-        }
+        const versions = parseRetryVersions(msg.retry_versions)
         return versions.length > 0 ? versions.length + 1 : 0 // 当前版本 + 所有重试版本
       }
       return 0
@@ -226,7 +220,10 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
       ),
     }
 
-    const visibleMessages = messages.filter((msg) => msg.role !== 'system')
+    const visibleMessages = useMemo(
+      () => messages.filter((msg) => msg.role !== 'system'),
+      [messages]
+    )
 
     return (
       <div ref={ref} className="h-full min-h-0 overflow-y-auto overscroll-contain px-6 py-4 bg-white">
@@ -265,16 +262,10 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
                                                 ))}
                                               </div>
                                             )}
-                                            {/* 文本内容 */}
-                      <div className="text-gray-900 max-h-64 overflow-y-auto pr-1">
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm, remarkMath]}
-                          rehypePlugins={[rehypeKatex]}
-                          components={markdownComponents}
-                        >
-                          {convertLatexDelimiters(msg.content)}
-                        </ReactMarkdown>
-                      </div>
+                    {/* 文本内容（原始文本，不渲染） */}
+                    <div className="text-gray-900 max-h-64 overflow-y-auto pr-1 whitespace-pre-wrap break-words">
+                      {msg.content}
+                    </div>
                     </div>
                   </div>
                 ) : (
@@ -409,6 +400,7 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
   }
 )
 
+const MessageList = React.memo(MessageListInner)
 MessageList.displayName = 'MessageList'
 
 export default MessageList
