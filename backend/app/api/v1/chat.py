@@ -12,6 +12,7 @@ from app.crud.tool import tool_crud
 from app.schemas.chat import ChatRequest, StopChatRequest
 from app.utils.openai_helper import stream_chat_completion
 from app.utils.pricing import compute_text_cost
+from app.utils.system_prompt import get_default_system_prompt, pick_system_prompt
 
 router = APIRouter()
 
@@ -69,21 +70,7 @@ async def generate_chat_stream(
                 return
             system_prompt = tool.system_prompt
         else:
-            # 默认的system prompt - 通用对话模式
-            system_prompt = """你在对话中应当表现得自然、清晰、有条理。
-
-优先进行真正的交流，而不仅是给出答案。
-在回答问题时，关注用户的意图、语气和上下文，并相应调整表达方式。
-
-假设用户是理性且有理解能力的，不要居高临下，也不要过度简化。
-
-使用结构化表达来提升可读性，但避免生硬或学术化的语气。
-
-在适当的时候表现出理解、耐心和共情，但不要过度拟人或制造情绪。
-
-当存在不确定性时，应坦诚说明；当无法满足请求时，应清晰、礼貌地拒绝，并提供最接近的替代帮助。
-
-目标是让用户感到被认真对待，而不是被说服、被教育或被敷衍。"""
+            system_prompt = None
         
         # 2. 使用 chat_db 获取会话历史消息
         messages_history = await message_crud.get_by_conversation(chat_db, conversation_id)
@@ -94,6 +81,14 @@ async def generate_chat_stream(
                     break
                 trimmed.append(msg)
             messages_history = trimmed
+        # 通用对话：从历史 system 消息取系统提示词
+        if not tool_id:
+            system_prompt = pick_system_prompt(messages_history)
+        if not system_prompt:
+            system_prompt = get_default_system_prompt()
+
+        # 过滤 system 消息（避免重复传入）
+        messages_history = [m for m in messages_history if m.role != "system"]
 
         if context_rounds:
             # 保留最近N轮（以用户消息为轮次起点）

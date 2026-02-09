@@ -3,8 +3,9 @@ import { useAppStore } from '../store/app'
 import apiClient from '../api/client'
 import MessageList from './MessageList'
 import ChatInput from './ChatInput'
-import { Plus, Download, Square, ChevronDown, Check } from 'lucide-react'
+import { Plus, Download, Square, ChevronDown, Check, FileText, X, Copy } from 'lucide-react'
 import { addToast } from './ui'
+import { Message } from '../types/api'
 
 interface ImageFile {
   file: File
@@ -23,6 +24,31 @@ const fileToBase64 = (file: File): Promise<string> => {
     reader.onerror = reject
     reader.readAsDataURL(file)
   })
+}
+
+const DEFAULT_SYSTEM_PROMPT = `你在对话中应当表现得自然、清晰、有条理。
+
+优先进行真正的交流，而不仅是给出答案。
+在回答问题时，关注用户的意图、语气和上下文，并相应调整表达方式。
+
+假设用户是理性且有理解能力的，不要居高临下，也不要过度简化。
+
+使用结构化表达来提升可读性，但避免生硬或学术化的语气。
+
+在适当的时候表现出理解、耐心和共情，但不要过度拟人或制造情绪。
+
+当存在不确定性时，应坦诚说明；当无法满足请求时，应清晰、礼貌地拒绝，并提供最接近的替代帮助。
+
+目标是让用户感到被认真对待，而不是被说服、被教育或被敷衍。`
+
+const getSystemPromptFromMessages = (msgs: Message[]): string => {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === 'system') {
+      const content = (msgs[i].content || '').trim()
+      if (content) return msgs[i].content
+    }
+  }
+  return ''
 }
 
 function ChatWindow() {
@@ -51,6 +77,9 @@ function ChatWindow() {
   const [images, setImages] = useState<ImageFile[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false)
+  const [promptPanelOpen, setPromptPanelOpen] = useState(false)
+  const [systemPromptDraft, setSystemPromptDraft] = useState('')
+  const [promptSaving, setPromptSaving] = useState(false)
   const [selectedVendor, setSelectedVendor] = useState<string>('')
   const vendorOffsetPx = useMemo(() => {
     if (availableModelGroups.length === 0) return 0
@@ -64,10 +93,30 @@ function ChatWindow() {
   }, [availableModelGroups, selectedVendor])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const hasVisibleMessages = useMemo(
+    () => messages.some((m) => m.role !== 'system'),
+    [messages]
+  )
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  useEffect(() => {
+    if (promptPanelOpen) return
+    if (currentTool) {
+      setSystemPromptDraft(currentTool.system_prompt || '')
+      return
+    }
+    const fromMessages = getSystemPromptFromMessages(messages)
+    setSystemPromptDraft(fromMessages || DEFAULT_SYSTEM_PROMPT)
+  }, [
+    promptPanelOpen,
+    currentTool?.id,
+    currentTool?.system_prompt,
+    currentConversation?.id,
+    messages,
+  ])
 
 
   useEffect(() => {
@@ -153,6 +202,45 @@ function ChatWindow() {
       setIsStreaming(false)
       setChatLoading(false)
       addToast('已停止生成', 'info')
+    }
+  }
+
+  const handleSaveSystemPrompt = async () => {
+    if (currentTool) return
+    let conv = currentConversation
+    try {
+      setPromptSaving(true)
+      if (!conv) {
+        const newConv = await apiClient.createConversation(
+          null,
+          `通用聊天 - ${new Date().toLocaleString()}`
+        )
+        conv = newConv.data
+        setCurrentConversation(conv)
+        setConversations(prev => [conv!, ...prev])
+      }
+      if (!conv) return
+      await apiClient.updateConversation(conv.id, {
+        system_prompt: systemPromptDraft,
+      })
+      const refresh = await apiClient.getConversation(conv.id)
+      setMessages(refresh.data.messages || [])
+      addToast('系统提示词已保存', 'success')
+    } catch (error) {
+      console.error('Failed to save system prompt:', error)
+      addToast('保存失败', 'error')
+    } finally {
+      setPromptSaving(false)
+    }
+  }
+
+  const handleCopySystemPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(systemPromptDraft || '')
+      addToast('已复制提示词', 'success')
+    } catch (error) {
+      console.error('Failed to copy system prompt:', error)
+      addToast('复制失败', 'error')
     }
   }
 
@@ -290,6 +378,7 @@ function ChatWindow() {
           role: 'assistant' as const,
           content: '__waiting__',
           thinking_collapsed: true,
+          thinking_done: false,
           created_at: new Date().toISOString(),
         }
         setMessages((msgs) => [...(Array.isArray(msgs) ? msgs : []), waitingMessage])
@@ -316,6 +405,7 @@ function ChatWindow() {
                     ...updatedMsgs[msgIdx],
                     thinking: prevThinking + chunk,
                     thinking_collapsed: prevCollapsed ?? true,
+                    thinking_done: false,
                   }
                   return updatedMsgs
                 }
@@ -334,6 +424,7 @@ function ChatWindow() {
                       ...updatedMsgs[msgIdx],
                       thinking: prevThinking + chunk,
                       thinking_collapsed: prevCollapsed ?? true,
+                      thinking_done: false,
                     }
                     return updatedMsgs
                   }
@@ -362,6 +453,7 @@ function ChatWindow() {
                 content: contentBuffer,
                 thinking: thinkingBuffer || undefined,
                 thinking_collapsed: thinkingBuffer ? true : undefined,
+                thinking_done: thinkingBuffer ? false : true,
                 created_at: new Date().toISOString(),
               }
               setMessages((msgs) => {
@@ -437,6 +529,7 @@ function ChatWindow() {
                 updatedMsgs[msgIdx] = {
                   ...completeMessage,
                   thinking_collapsed: prev?.thinking_collapsed ?? (completeMessage.thinking ? true : undefined),
+                  thinking_done: true,
                 }
                 return updatedMsgs
               }
@@ -462,6 +555,13 @@ function ChatWindow() {
           }
           if (waitingMessageId) {
             setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
+          }
+          if (assistantMessageId) {
+            setMessages((msgs) =>
+              msgs.map((m) =>
+                m.id === assistantMessageId ? { ...m, thinking_done: true } : m
+              )
+            )
           }
           break
         } else if (event === 'stopped') {
@@ -498,6 +598,13 @@ function ChatWindow() {
           if (waitingMessageId) {
             setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
           }
+          if (assistantMessageId) {
+            setMessages((msgs) =>
+              msgs.map((m) =>
+                m.id === assistantMessageId ? { ...m, thinking_done: true } : m
+              )
+            )
+          }
           break
         } else if (event === 'error') {
           // 错误事件
@@ -521,6 +628,13 @@ function ChatWindow() {
           }
           if (waitingMessageId) {
             setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
+          }
+          if (assistantMessageId) {
+            setMessages((msgs) =>
+              msgs.map((m) =>
+                m.id === assistantMessageId ? { ...m, thinking_done: true } : m
+              )
+            )
           }
           break
         }
@@ -655,7 +769,7 @@ function ChatWindow() {
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-white text-gray-900 h-full overflow-hidden">
+    <div className="flex-1 flex flex-col bg-white text-gray-900 h-full overflow-hidden relative">
       {/* 工具栏 */}
       <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between bg-white flex-shrink-0">
         <div className="flex items-center gap-4">
@@ -753,6 +867,13 @@ function ChatWindow() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setPromptPanelOpen(true)}
+            className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 rounded-lg transition text-sm text-gray-600 hover:text-gray-900"
+          >
+            <FileText size={18} />
+            系统提示词
+          </button>
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-500">上下文轮数</span>
             <select
@@ -795,7 +916,7 @@ function ChatWindow() {
       </div>
 
       {/* 主内容区域 - 根据是否有消息调整布局 */}
-      {messages.length === 0 ? (
+      {!hasVisibleMessages ? (
         /* 无消息时：标题和输入框垂直居中 */
         <div className="flex-1 flex flex-col items-center justify-center px-4 pb-20">
           <h1 className="text-3xl font-semibold text-gray-800 mb-8">有什么可以帮忙的？</h1>
@@ -842,6 +963,70 @@ function ChatWindow() {
           </div>
         </>
       )}
+
+      {/* 系统提示词面板 - 方案A：右侧抽屉 */}
+      <div
+        className={`absolute inset-0 z-30 transition ${
+          promptPanelOpen ? 'bg-black/20' : 'pointer-events-none'
+        }`}
+        onClick={() => setPromptPanelOpen(false)}
+      />
+      <div
+        className={`absolute right-0 top-0 h-full w-[360px] max-w-[90vw] bg-white border-l border-gray-200 shadow-xl z-40 transform transition-transform duration-200 ${
+          promptPanelOpen ? 'translate-x-0' : 'translate-x-full'
+        }`}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900">系统提示词</h3>
+            <p className="text-xs text-gray-500">
+              {currentTool ? '提示词广场（只读）' : '仅作用于当前会话'}
+            </p>
+          </div>
+          <button
+            onClick={() => setPromptPanelOpen(false)}
+            className="p-1 rounded hover:bg-gray-100 text-gray-500"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="p-4 flex flex-col gap-3 h-[calc(100%-48px)]">
+          <textarea
+            value={systemPromptDraft}
+            onChange={(e) => setSystemPromptDraft(e.target.value)}
+            readOnly={!!currentTool}
+            placeholder={currentTool ? '该工具未设置系统提示词' : '输入系统提示词...'}
+            className={`flex-1 w-full rounded-lg border px-3 py-2 text-sm leading-6 resize-none focus:outline-none ${
+              currentTool
+                ? 'border-gray-200 bg-gray-50 text-gray-700'
+                : 'border-gray-200 bg-white text-gray-900 focus:ring-2 focus:ring-gray-200'
+            }`}
+          />
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-500">
+              {currentTool ? '提示词来源：提示词广场' : '未设置时使用默认系统提示词'}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleCopySystemPrompt}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50"
+              >
+                <Copy size={14} />
+                复制
+              </button>
+              {!currentTool && (
+                <button
+                  onClick={handleSaveSystemPrompt}
+                  disabled={promptSaving}
+                  className="px-3 py-1.5 text-xs rounded-md bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-60"
+                >
+                  {promptSaving ? '保存中...' : '保存'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

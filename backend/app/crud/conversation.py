@@ -84,7 +84,8 @@ class CRUDConversation:
         
         update_data = obj_in.model_dump(exclude_unset=True)
         for field, value in update_data.items():
-            setattr(db_obj, field, value)
+            if hasattr(db_obj, field):
+                setattr(db_obj, field, value)
         
         await db.commit()
         await db.refresh(db_obj)

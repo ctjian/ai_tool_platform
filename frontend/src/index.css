@@ -60,6 +60,9 @@ code {
 
 .thinking-caret {
   display: inline-block;
+}
+
+.thinking-caret-animate {
   animation: thinking-caret 1s infinite;
 }
 

@@ -31,8 +31,10 @@ export const apiClient = {
   },
   getConversation: (conversationId: string) =>
     api.get<Conversation>(`/conversations/${conversationId}`),
-  updateConversation: (conversationId: string, data: { title: string }) =>
-    api.put(`/conversations/${conversationId}`, data),
+  updateConversation: (
+    conversationId: string,
+    data: { title?: string; system_prompt?: string | null }
+  ) => api.put<Conversation>(`/conversations/${conversationId}`, data),
   deleteConversation: (conversationId: string) =>
     api.delete(`/conversations/${conversationId}`),
   exportConversation: (conversationId: string) =>

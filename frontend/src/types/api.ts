@@ -31,6 +31,7 @@ export interface Message {
   cost_meta?: any
   thinking?: string
   thinking_collapsed?: boolean
+  thinking_done?: boolean
   created_at: string
 }
 

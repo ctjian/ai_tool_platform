@@ -57,6 +57,7 @@ class ConversationCreate(BaseModel):
 class ConversationUpdate(BaseModel):
     """更新会话"""
     title: Optional[str] = Field(None, min_length=1, max_length=200)
+    system_prompt: Optional[str] = Field(None, description="系统提示词（写入到 system 消息）")
 
 
 class ConversationResponse(BaseModel):

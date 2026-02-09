@@ -1,6 +1,7 @@
 """会话管理API"""
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, delete
 import os
 from typing import List, Optional, Dict, Any
 import json
@@ -18,9 +19,53 @@ from app.schemas.conversation import (
     MessageResponse,
 )
 from app.utils.openai_helper import generate_title_for_conversation
+from app.models.message import Message
 
 router = APIRouter()
 DEBUG_THINKING = os.getenv("DEBUG_THINKING") == "1"
+
+
+async def upsert_system_prompt(
+    db: AsyncSession,
+    conversation_id: str,
+    content: Optional[str],
+):
+    trimmed = (content or "").strip()
+    if not trimmed:
+        await db.execute(
+            delete(Message).where(
+                Message.conversation_id == conversation_id,
+                Message.role == "system",
+            )
+        )
+        await db.commit()
+        return None
+
+    result = await db.execute(
+        select(Message)
+        .where(
+            Message.conversation_id == conversation_id,
+            Message.role == "system",
+        )
+        .order_by(Message.created_at.desc())
+        .limit(1)
+    )
+    system_msg = result.scalar_one_or_none()
+    if system_msg:
+        system_msg.content = content
+        await db.commit()
+        await db.refresh(system_msg)
+        return system_msg
+
+    return await message_crud.create(
+        db,
+        conversation_id=conversation_id,
+        role="system",
+        content=content,
+        images=None,
+        cost_meta=None,
+        thinking=None,
+    )
 
 
 @router.get("/conversations", response_model=ConversationListResponse)
@@ -148,9 +193,21 @@ async def update_conversation(
     db: AsyncSession = Depends(get_chat_session)
 ):
     """更新会话（主要是修改标题）"""
-    conversation = await conversation_crud.update(db, conversation_id, conversation_in)
-    if not conversation:
+    # 确认会话存在
+    existing = await conversation_crud.get(db, conversation_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="会话不存在")
+
+    # 先处理 system prompt 更新（写入 system 消息）
+    if conversation_in.system_prompt is not None:
+        await upsert_system_prompt(db, conversation_id, conversation_in.system_prompt)
+    
+    # 再处理标题更新
+    conversation = None
+    if conversation_in.title is not None:
+        conversation = await conversation_crud.update(db, conversation_id, conversation_in)
+    else:
+        conversation = existing
     
     message_count = await conversation_crud.get_message_count(db, conversation_id)
     

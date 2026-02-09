@@ -226,10 +226,12 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
       ),
     }
 
+    const visibleMessages = messages.filter((msg) => msg.role !== 'system')
+
     return (
       <div className="flex-1 overflow-y-auto px-6 py-4 bg-white">
         <div className="max-w-3xl mx-auto space-y-6">
-            {messages.map((msg) => {
+            {visibleMessages.map((msg) => {
               const totalVersions = getTotalVersions(msg)
               const currentVersionIndex = versionIndices[msg.id] ?? 0
               const displayVersionIndex = totalVersions > 0
@@ -241,6 +243,8 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
               const hasThinking = msg.role === 'assistant' && (msg.thinking && msg.thinking.trim().length > 0)
               const showThinking = msg.role === 'assistant' && (hasThinking || isWaiting)
               const thinkingCollapsed = msg.thinking_collapsed ?? true
+              const thinkingDone = msg.thinking_done ?? !isWaiting
+              const thinkingLabel = thinkingDone ? '思考完成' : '正在思考'
               
               return (
               <div key={msg.id} className="flex flex-col">
@@ -293,8 +297,14 @@ const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
                             }}
                           >
                             <summary className="thinking-summary cursor-pointer select-none flex items-center gap-1">
-                              <span className="thinking-text">正在思考</span>
-                              <span className="thinking-caret">›</span>
+                              <span className="thinking-text">{thinkingLabel}</span>
+                              <span
+                                className={`thinking-caret ${thinkingDone ? '' : 'thinking-caret-animate'} ${
+                                  thinkingCollapsed ? '' : 'rotate-90'
+                                }`}
+                              >
+                                ›
+                              </span>
                             </summary>
                             {hasThinking && (
                               <div className="mt-2 rounded-md border-l-4 border-gray-200 bg-gray-50 px-3 py-2 text-gray-700">
