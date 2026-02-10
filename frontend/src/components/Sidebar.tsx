@@ -3,6 +3,7 @@ import { Settings, Compass, Plus, MoreHorizontal, Pencil, Trash2, Wrench, PanelL
 import apiClient from '../api/client'
 import { addToast } from './ui'
 import { useState } from 'react'
+import openaiLogo from '../assets/chatgpt.svg'
 
 interface SidebarProps {
   onPageChange?: (page: 'chat' | 'settings' | 'explorer' | 'custom-tools') => void
@@ -169,23 +170,42 @@ function Sidebar({ onPageChange, currentPage = 'chat' }: SidebarProps) {
     <div className={`bg-white border-r border-gray-200 flex flex-col h-screen text-gray-900 transition-all ${collapsed ? 'w-16' : 'w-64'}`}>
       {/* Logo/标题和新建聊天按钮 */}
       <div className={`border-b border-gray-200 ${collapsed ? 'p-2' : 'p-3'} space-y-3`}>
-        <div className={`flex items-center ${collapsed ? 'justify-center' : 'justify-between'}`}>
+        <div className={`flex items-center ${collapsed ? 'justify-center' : 'justify-between'} gap-2`}>
           <div className="flex items-center gap-2">
-            <span className="text-2xl">🤖</span>
-            {!collapsed && <span className="font-bold">一站式AI工具平台</span>}
+            {collapsed ? (
+              <div className="relative h-6 w-6 flex items-center justify-center group">
+                <div className="absolute inset-0 flex items-center justify-center transition-opacity group-hover:opacity-0">
+                <img src={openaiLogo} alt="OpenAI" className="h-5 w-5" />
+                </div>
+                <button
+                  onClick={() => setCollapsed((v) => !v)}
+                  className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 text-gray-600 hover:bg-gray-100 active:bg-gray-200 rounded transition"
+                  title="展开侧栏"
+                  aria-label="展开侧栏"
+                >
+                  <PanelLeftOpen size={16} />
+                </button>
+              </div>
+            ) : (
+              <>
+                <img src={openaiLogo} alt="OpenAI" className="h-5 w-5" />
+              </>
+            )}
           </div>
-          <button
-            onClick={() => setCollapsed((v) => !v)}
-            className={`rounded text-gray-600 hover:bg-gray-100 active:bg-gray-200 transition ${collapsed ? 'ml-0' : 'ml-2'} p-1`}
-            title={collapsed ? '展开侧栏' : '收起侧栏'}
-            aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
-          >
-            {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-          </button>
+          {!collapsed && (
+            <button
+              onClick={() => setCollapsed((v) => !v)}
+              className="h-6 w-6 flex items-center justify-center text-gray-600 hover:bg-gray-100 active:bg-gray-200 rounded transition"
+              title="收起侧栏"
+              aria-label="收起侧栏"
+            >
+              <PanelLeftClose size={16} />
+            </button>
+          )}
         </div>
         <button
           onClick={handleNewChat}
-          className={`w-full flex items-center ${collapsed ? 'justify-center' : 'justify-center gap-2'} px-3 py-2 border border-gray-300 text-gray-700 hover:bg-gray-100 active:bg-gray-200 rounded-lg transition text-sm`}
+          className={`w-full flex items-center ${collapsed ? 'justify-center' : 'justify-center gap-2'} px-3 py-2 ${collapsed ? '' : 'border border-gray-300'} text-gray-700 hover:bg-gray-100 active:bg-gray-200 rounded-lg transition text-sm`}
           title="新建聊天"
         >
           <Plus size={16} />

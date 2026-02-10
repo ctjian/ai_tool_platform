@@ -822,7 +822,7 @@ function ChatWindow() {
             </>
           ) : (
             <>
-              <span className="text-2xl">💬</span>
+              {/* <span className="text-2xl">💬</span> */}
               <div>
                 <h2 className="font-bold text-gray-900">通用聊天</h2>
                 <p className="text-xs text-gray-600">与AI助手直接对话</p>
