@@ -269,14 +269,11 @@ function ChatWindow() {
 
   // 停止生成
   const handleStopGeneration = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      setIsStreaming(false)
-      setChatLoading(false)
-      addToast('已停止生成', 'info')
-      if (currentConversation?.id) {
-        apiClient.stopChat(currentConversation.id).catch(() => {})
-      }
+    setIsStreaming(false)
+    setChatLoading(false)
+    addToast('已停止生成', 'info')
+    if (currentConversation?.id) {
+      apiClient.stopChat(currentConversation.id).catch(() => {})
     }
   }
 
@@ -605,6 +602,39 @@ function ChatWindow() {
           stopFlush()
           setIsStreaming(false)
           setChatLoading(false)
+          
+          if (data && typeof data === 'object' && 'message' in data) {
+            const completeMessage = (data as any).message
+            setMessages((msgs) => {
+              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
+              if (msgIdx >= 0) {
+                const updatedMsgs = [...msgs]
+                const prev = updatedMsgs[msgIdx] as any
+                updatedMsgs[msgIdx] = {
+                  ...completeMessage,
+                  thinking_collapsed: prev?.thinking_collapsed ?? (completeMessage.thinking ? true : undefined),
+                  thinking_done: true,
+                }
+                return updatedMsgs
+              }
+              return msgs
+            })
+            setVersionIndices({ ...versionIndices, [assistantMessageId]: 0 })
+          } else if (assistantMessageId) {
+            setMessages((msgs) => {
+              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
+              if (msgIdx >= 0) return msgs
+              const lastIdx = [...msgs].reverse().findIndex(m => m.role === 'assistant')
+              if (lastIdx >= 0) {
+                const realIdx = msgs.length - 1 - lastIdx
+                const updatedMsgs = [...msgs]
+                updatedMsgs[realIdx] = { ...updatedMsgs[realIdx], id: assistantMessageId }
+                return updatedMsgs
+              }
+              return msgs
+            })
+          }
+
           clearWaitingMessage()
           if (assistantMessageId) {
             setMessages((msgs) =>

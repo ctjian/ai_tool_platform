@@ -4,6 +4,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import AsyncGenerator, Optional, Dict
 import os
+import asyncio
 import json
 
 from app.database import get_session, get_chat_session
@@ -193,6 +194,10 @@ async def generate_chat_stream(
         full_response = ""
         thinking_response = ""
         usage_data: Optional[Dict] = None
+        stopped_by_user = False
+        cancelled = False
+        assistant_saved = False
+        assistant_msg = None
         active_streams[conversation_id] = True
 
         stream_iter = (
@@ -211,10 +216,61 @@ async def generate_chat_stream(
             else stream_chat_completion(api_config, openai_messages)
         )
 
+        async def persist_assistant() -> Optional[Dict]:
+            nonlocal assistant_saved, assistant_msg
+            if assistant_saved or not full_response:
+                return None
+            cost_meta: Optional[Dict] = None
+            if usage_data and not use_proxy:
+                prompt_tokens = int(usage_data.get("prompt_tokens") or 0)
+                completion_tokens = int(usage_data.get("completion_tokens") or 0)
+                if prompt_tokens or completion_tokens:
+                    cost_meta = compute_text_cost(
+                        api_config.model,
+                        prompt_tokens,
+                        completion_tokens,
+                    )
+            cost_meta_json = json.dumps(cost_meta, ensure_ascii=False) if cost_meta else None
+            thinking_text = thinking_response if thinking_response else None
+            if DEBUG_THINKING:
+                print(
+                    f"[thinking] done model={api_config.model} "
+                    f"thinking_len={len(thinking_response)} "
+                    f"has_usage={bool(usage_data)}"
+                )
+
+            if retry_message_id:
+                update_msg = await message_crud.get(chat_db, retry_message_id)
+                if update_msg:
+                    retry_versions = []
+                    if update_msg.retry_versions:
+                        try:
+                            retry_versions = json.loads(update_msg.retry_versions)
+                        except:
+                            retry_versions = []
+                    retry_versions.append(update_msg.content)
+                    update_msg.content = full_response
+                    update_msg.cost_meta = cost_meta_json
+                    update_msg.thinking = thinking_text
+                    update_msg.retry_versions = json.dumps(retry_versions)
+                    await message_crud.update(chat_db, retry_message_id, update_msg)
+                    assistant_msg = update_msg
+            else:
+                assistant_msg = await message_crud.create(
+                    chat_db,
+                    conversation_id,
+                    "assistant",
+                    full_response,
+                    cost_meta=cost_meta_json,
+                    thinking=thinking_text,
+                )
+            assistant_saved = True
+            return cost_meta
+
         async for event in stream_iter:
             # 检查是否被停止
             if not active_streams.get(conversation_id, False):
-                yield f"event: stopped\ndata: {json.dumps({'message': '生成已停止'})}\n\n"
+                stopped_by_user = True
                 break
             
             # 检查是否是错误
@@ -241,68 +297,14 @@ async def generate_chat_stream(
             full_response += chunk
             chunk_data = json.dumps({"content": chunk})
             yield f"event: token\ndata: {chunk_data}\n\n"
-        
-        # 8. 使用 chat_db 保存AI响应到数据库
-        if full_response and active_streams.get(conversation_id, False):
-            cost_meta: Optional[Dict] = None
-            if usage_data and not use_proxy:
-                prompt_tokens = int(usage_data.get("prompt_tokens") or 0)
-                completion_tokens = int(usage_data.get("completion_tokens") or 0)
-                if prompt_tokens or completion_tokens:
-                    cost_meta = compute_text_cost(
-                        api_config.model,
-                        prompt_tokens,
-                        completion_tokens,
-                    )
-            cost_meta_json = json.dumps(cost_meta, ensure_ascii=False) if cost_meta else None
-            thinking_text = thinking_response if thinking_response else None
-            if DEBUG_THINKING:
-                print(
-                    f"[thinking] done model={api_config.model} "
-                    f"thinking_len={len(thinking_response)} "
-                    f"has_usage={bool(usage_data)}"
-                )
 
-            assistant_msg = None
-            if retry_message_id:
-                # 重试情况：更新现有消息，将当前content移动到retry_versions
-                update_msg = await message_crud.get(chat_db, retry_message_id)
-                if update_msg:
-                    # 获取现有的重试版本
-                    retry_versions = []
-                    if update_msg.retry_versions:
-                        try:
-                            retry_versions = json.loads(update_msg.retry_versions)
-                        except:
-                            retry_versions = []
-                    
-                    # 将当前内容添加到重试版本历史
-                    retry_versions.append(update_msg.content)
-                    
-                    # 更新消息：新内容作为当前content，旧内容存入retry_versions
-                    update_msg.content = full_response
-                    update_msg.cost_meta = cost_meta_json
-                    update_msg.thinking = thinking_text
-                    update_msg.retry_versions = json.dumps(retry_versions)
-                    await message_crud.update(chat_db, retry_message_id, update_msg)
-                    assistant_msg = update_msg
-            else:
-                # 正常情况：创建新消息
-                assistant_msg = await message_crud.create(
-                    chat_db,
-                    conversation_id,
-                    "assistant",
-                    full_response,
-                    cost_meta=cost_meta_json,
-                    thinking=thinking_text,
-                )
-            
-            # 发送完成事件 - 包含完整的消息对象
+        # 8. 使用 chat_db 保存AI响应到数据库
+        if full_response and (active_streams.get(conversation_id, False) or stopped_by_user):
+            cost_meta = await persist_assistant()
             message_obj = {
                 "message_id": message_id,
-                "finish_reason": "stop"
+                "finish_reason": "stopped" if stopped_by_user else "stop"
             }
-            
             if assistant_msg:
                 message_obj["message"] = {
                     "id": assistant_msg.id,
@@ -314,19 +316,40 @@ async def generate_chat_stream(
                     "thinking": assistant_msg.thinking,
                     "created_at": assistant_msg.created_at.isoformat() if assistant_msg.created_at else None,
                 }
-            
             done_data = json.dumps(message_obj)
-            yield f"event: done\ndata: {done_data}\n\n"
+            if stopped_by_user:
+                yield f"event: stopped\ndata: {done_data}\n\n"
+            else:
+                yield f"event: done\ndata: {done_data}\n\n"
+        elif stopped_by_user:
+            stopped_data = json.dumps({
+                "message_id": message_id,
+                "finish_reason": "stopped"
+            })
+            yield f"event: stopped\ndata: {stopped_data}\n\n"
         
         # 清理
         if conversation_id in active_streams:
             del active_streams[conversation_id]
     
+    except asyncio.CancelledError:
+        cancelled = True
+        # 客户端断开/取消时，避免传播取消导致连接关闭异常
+        # 留给 finally 做持久化和清理
+        return
     except Exception as e:
         error_data = json.dumps({"error": f"服务器错误: {str(e)}"})
         yield f"event: error\ndata: {error_data}\n\n"
         
         # 清理
+        if conversation_id in active_streams:
+            del active_streams[conversation_id]
+    finally:
+        if (stopped_by_user or cancelled) and full_response and not assistant_saved:
+            try:
+                await persist_assistant()
+            except Exception:
+                pass
         if conversation_id in active_streams:
             del active_streams[conversation_id]
 
