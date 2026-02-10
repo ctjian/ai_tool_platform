@@ -50,8 +50,8 @@ function App() {
             setAvailableModelGroups([])
             if (Array.isArray(models) && models.length > 0) {
               setAvailableModels(models)
-            } else if (model) {
-              setAvailableModels([model])
+            } else if (apiConfig.model) {
+              setAvailableModels([apiConfig.model])
             }
           }
           

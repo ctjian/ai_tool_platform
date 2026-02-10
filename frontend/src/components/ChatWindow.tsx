@@ -58,7 +58,6 @@ function ChatWindow() {
     messages,
     setMessages,
     setCurrentConversation,
-    conversations,
     setConversations,
     apiConfig,
     availableModels,
@@ -244,7 +243,7 @@ function ChatWindow() {
       )
       setCurrentConversation(res.data)
       setMessages([])
-      setConversations([...conversations, res.data])
+      setConversations(prev => [...prev, res.data])
     } catch (error) {
       console.error('Failed to create conversation:', error)
     }
@@ -343,6 +342,10 @@ function ChatWindow() {
 
     let waitingMessageId: string | null = null
     let conversationId: string | null = currentConversation?.id || null
+    const clearWaitingMessage = () => {
+      if (!waitingMessageId) return
+      setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
+    }
     let flushTimer: number | null = null
     const stopFlush = () => {
       if (flushTimer !== null) {
@@ -585,9 +588,7 @@ function ChatWindow() {
               return msgs
             })
           }
-          if (waitingMessageId) {
-            setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
-          }
+          clearWaitingMessage()
           if (assistantMessageId) {
             setMessages((msgs) =>
               msgs.map((m) =>
@@ -604,9 +605,7 @@ function ChatWindow() {
           stopFlush()
           setIsStreaming(false)
           setChatLoading(false)
-          if (waitingMessageId) {
-            setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
-          }
+          clearWaitingMessage()
           if (assistantMessageId) {
             setMessages((msgs) =>
               msgs.map((m) =>
@@ -626,9 +625,7 @@ function ChatWindow() {
           stopFlush()
           setIsStreaming(false)
           setChatLoading(false)
-          if (waitingMessageId) {
-            setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
-          }
+          clearWaitingMessage()
           if (assistantMessageId) {
             setMessages((msgs) =>
               msgs.map((m) =>
@@ -641,9 +638,7 @@ function ChatWindow() {
       }
 
       setIsStreaming(false)
-      if (waitingMessageId) {
-        setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
-      }
+      clearWaitingMessage()
 
       // 在第一次回复后自动生成标题（重试时不生成）
       if (shouldAutoTitle && conversationId && conversationTitle && !retryMessageId) {
@@ -680,17 +675,13 @@ function ChatWindow() {
       }
     } catch (error: any) {
       if (error?.name === 'AbortError') {
-        if (waitingMessageId) {
-          setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
-        }
+        clearWaitingMessage()
         stopFlush()
         setIsStreaming(false)
         return
       }
       console.error('Failed to send message:', error)
-      if (waitingMessageId) {
-        setMessages((msgs) => msgs.filter(m => m.id !== waitingMessageId))
-      }
+      clearWaitingMessage()
       const errorText =
         typeof error?.message === 'string'
           ? error.message

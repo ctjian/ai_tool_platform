@@ -1,5 +1,5 @@
 import { useAppStore } from '../store/app'
-import { Settings, Compass, Plus, MoreHorizontal, Pencil, Trash2, X, Wrench } from 'lucide-react'
+import { Settings, Compass, Plus, MoreHorizontal, Pencil, Trash2, Wrench } from 'lucide-react'
 import apiClient from '../api/client'
 import { addToast } from './ui'
 import { useState } from 'react'
@@ -48,7 +48,6 @@ function groupConversationsByDate(conversations: any[]) {
 function Sidebar({ onPageChange, currentPage = 'chat' }: SidebarProps) {
   const {
     conversations,
-    currentTool,
     setCurrentTool,
     currentConversation,
     setCurrentConversation,
@@ -56,7 +55,6 @@ function Sidebar({ onPageChange, currentPage = 'chat' }: SidebarProps) {
     setConversations,
   } = useAppStore()
 
-  const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [menuModalConv, setMenuModalConv] = useState<any>(null)
@@ -114,7 +112,6 @@ function Sidebar({ onPageChange, currentPage = 'chat' }: SidebarProps) {
 
   const handleDeleteConversation = async (convId: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    setMenuOpenId(null)
     
     if (!confirm('确定要删除这个对话吗？')) return
 
@@ -137,7 +134,6 @@ function Sidebar({ onPageChange, currentPage = 'chat' }: SidebarProps) {
 
   const handleStartRename = (conv: any, e: React.MouseEvent) => {
     e.stopPropagation()
-    setMenuOpenId(null)
     setRenamingId(conv.id)
     setRenameValue(conv.title)
   }

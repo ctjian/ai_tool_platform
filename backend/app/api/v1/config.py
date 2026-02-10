@@ -29,11 +29,17 @@ def mask_api_key(api_key: str) -> str:
 @router.get("/default")
 async def get_default_config():
     """获取后端默认配置（从.env读取）"""
+    model_groups = list(settings.openai_models_grouped)
+    models = list(settings.openai_models_list)
+    if settings.proxy_enabled:
+        # 让 chatgpt 分组排在最前面
+        model_groups = list(settings.proxy_models_grouped) + model_groups
+        models = list(settings.proxy_models_list) + models
     return {
         "has_api_key": bool(settings.OPENAI_API_KEY),
         "base_url": settings.OPENAI_BASE_URL,
-        "models": settings.openai_models_list,
-        "model_groups": settings.openai_models_grouped,
+        "models": models,
+        "model_groups": model_groups,
     }
 
 

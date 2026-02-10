@@ -11,8 +11,10 @@ from app.crud.conversation import conversation_crud, message_crud
 from app.crud.tool import tool_crud
 from app.schemas.chat import ChatRequest, StopChatRequest
 from app.utils.openai_helper import stream_chat_completion
+from app.utils.chat2api_helper import stream_chat2api_completion
 from app.utils.pricing import compute_text_cost
 from app.utils.system_prompt import get_default_system_prompt, pick_system_prompt
+from app.config import settings
 
 router = APIRouter()
 
@@ -178,17 +180,38 @@ async def generate_chat_stream(
         start_data = json.dumps({"message_id": message_id})
         yield f"event: start\ndata: {start_data}\n\n"
         
-        # 7. 调用OpenAI流式API
+        # 7. 调用流式API
         if not api_config or not getattr(api_config, "model", None):
             error_data = json.dumps({"error": "未提供模型，请在前端选择模型"})
+            yield f"event: error\ndata: {error_data}\n\n"
+            return
+        use_proxy = api_config.model in settings.proxy_models_list
+        if use_proxy and not settings.proxy_enabled:
+            error_data = json.dumps({"error": "未配置 Chat2API 代理"})
             yield f"event: error\ndata: {error_data}\n\n"
             return
         full_response = ""
         thinking_response = ""
         usage_data: Optional[Dict] = None
         active_streams[conversation_id] = True
-        
-        async for event in stream_chat_completion(api_config, openai_messages):
+
+        stream_iter = (
+            stream_chat2api_completion(
+                settings.PROXY_BASE_URL,
+                settings.ACCESS_TOKEN,
+                api_config.model,
+                openai_messages,
+                temperature=api_config.temperature,
+                max_tokens=api_config.max_tokens,
+                top_p=api_config.top_p,
+                frequency_penalty=api_config.frequency_penalty,
+                presence_penalty=api_config.presence_penalty,
+            )
+            if use_proxy
+            else stream_chat_completion(api_config, openai_messages)
+        )
+
+        async for event in stream_iter:
             # 检查是否被停止
             if not active_streams.get(conversation_id, False):
                 yield f"event: stopped\ndata: {json.dumps({'message': '生成已停止'})}\n\n"
@@ -222,7 +245,7 @@ async def generate_chat_stream(
         # 8. 使用 chat_db 保存AI响应到数据库
         if full_response and active_streams.get(conversation_id, False):
             cost_meta: Optional[Dict] = None
-            if usage_data:
+            if usage_data and not use_proxy:
                 prompt_tokens = int(usage_data.get("prompt_tokens") or 0)
                 completion_tokens = int(usage_data.get("completion_tokens") or 0)
                 if prompt_tokens or completion_tokens:

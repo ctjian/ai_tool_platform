@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, CardHeader, CardTitle, Button, Modal, ModalFooter, Input, Select, Form, FormGroup, addToast, Loading } from '../../components/ui';
+import { Button, Modal, ModalFooter, Input, Select, Form, FormGroup, addToast, Loading } from '../../components/ui';
 import apiClient from '../../api/client';
 
 interface Tool {
@@ -98,7 +98,7 @@ export const ToolManagementPage = () => {
     }
   };
 
-  const handleDelete = async (toolId: string) => {
+  const handleDelete = async (_toolId: string) => {
     if (!confirm('确定要删除这个工具吗？')) return;
 
     try {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, CardHeader, CardTitle, Button, Modal, ModalFooter, Input, Form, FormGroup, addToast, Loading } from '../../components/ui';
+import { Card, Button, Modal, ModalFooter, Input, Form, FormGroup, addToast, Loading } from '../../components/ui';
 import apiClient from '../../api/client';
 
 interface Category {
@@ -84,7 +84,7 @@ export const CategoryManagementPage = () => {
     }
   };
 
-  const handleDelete = async (categoryId: string) => {
+  const handleDelete = async (_categoryId: string) => {
     if (!confirm('确定要删除这个分类吗？')) return;
 
     try {

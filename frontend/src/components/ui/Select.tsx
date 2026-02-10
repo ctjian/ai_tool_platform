@@ -1,5 +1,3 @@
-import { ReactNode } from 'react';
-
 interface SelectProps {
   label?: string;
   options: Array<{ value: string; label: string }>;

@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     # 逗号分隔模型，分组用 ;，格式：Group:model1,model2;Group2:model3
     OPENAI_MODELS: str = "OpenAI:gpt-4o-mini,gpt-4o"
 
+    # Chat2API 代理配置
+    ACCESS_TOKEN: str = ""
+    PROXY_BASE_URL: str = ""
+    # 分组格式同 OPENAI_MODELS，例如：chatgpt:gpt-5-1,gpt-5-2
+    PROXY_MODELS: str = ""
+
     # 计费配置
     PRICING_FILE: str = str(Path(__file__).resolve().parents[1] / "data" / "pricing.json")
     PRICE_INPUT_PER_1M: float = 2.0  # 基础输入价格（美元/1M tokens）
@@ -72,6 +78,37 @@ class Settings(BaseSettings):
         for g in self.openai_models_grouped:
             flat.extend(g["models"])
         return flat
+
+    @property
+    def proxy_models_grouped(self) -> List[dict]:
+        """获取代理模型分组列表"""
+        groups = []
+        if not self.PROXY_MODELS:
+            return groups
+        for group_chunk in self.PROXY_MODELS.split(";"):
+            chunk = group_chunk.strip()
+            if not chunk:
+                continue
+            if ":" not in chunk:
+                groups.append({"name": "Proxy", "models": [m.strip() for m in chunk.split(",") if m.strip()]})
+                continue
+            name, models_str = chunk.split(":", 1)
+            models = [m.strip() for m in models_str.split(",") if m.strip()]
+            if models:
+                groups.append({"name": name.strip(), "models": models})
+        return groups
+
+    @property
+    def proxy_models_list(self) -> List[str]:
+        """获取代理模型列表（扁平）"""
+        flat = []
+        for g in self.proxy_models_grouped:
+            flat.extend(g["models"])
+        return flat
+
+    @property
+    def proxy_enabled(self) -> bool:
+        return bool(self.ACCESS_TOKEN and self.PROXY_BASE_URL and self.PROXY_MODELS)
 
     
     class Config:

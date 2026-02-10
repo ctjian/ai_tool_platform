@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { Category, Tool, Conversation, Message, ChatRequest } from '../types/api'
+import { Category, Tool, Conversation, ChatRequest } from '../types/api'
 
 const API_BASE = '/api/v1'
 
