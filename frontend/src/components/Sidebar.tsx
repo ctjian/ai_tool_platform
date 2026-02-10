@@ -1,5 +1,5 @@
 import { useAppStore } from '../store/app'
-import { Settings, Compass, Plus, MoreHorizontal, Pencil, Trash2, Wrench } from 'lucide-react'
+import { Settings, Compass, Plus, MoreHorizontal, Pencil, Trash2, Wrench, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import apiClient from '../api/client'
 import { addToast } from './ui'
 import { useState } from 'react'
@@ -58,6 +58,7 @@ function Sidebar({ onPageChange, currentPage = 'chat' }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [menuModalConv, setMenuModalConv] = useState<any>(null)
+  const [collapsed, setCollapsed] = useState(false)
 
   const handleNewChat = async () => {
     try {
@@ -165,26 +166,37 @@ function Sidebar({ onPageChange, currentPage = 'chat' }: SidebarProps) {
   }
 
   return (
-    <div className="w-64 bg-white border-r border-gray-200 flex flex-col h-screen text-gray-900">
+    <div className={`bg-white border-r border-gray-200 flex flex-col h-screen text-gray-900 transition-all ${collapsed ? 'w-16' : 'w-64'}`}>
       {/* Logo/标题和新建聊天按钮 */}
-      <div className="border-b border-gray-200 p-3 space-y-3">
-        <div className="flex items-center gap-2">
-          <span className="text-2xl">🤖</span>
-          <span className="font-bold">一站式AI工具平台</span>
+      <div className={`border-b border-gray-200 ${collapsed ? 'p-2' : 'p-3'} space-y-3`}>
+        <div className={`flex items-center ${collapsed ? 'justify-center' : 'justify-between'}`}>
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">🤖</span>
+            {!collapsed && <span className="font-bold">一站式AI工具平台</span>}
+          </div>
+          <button
+            onClick={() => setCollapsed((v) => !v)}
+            className={`rounded text-gray-600 hover:bg-gray-100 active:bg-gray-200 transition ${collapsed ? 'ml-0' : 'ml-2'} p-1`}
+            title={collapsed ? '展开侧栏' : '收起侧栏'}
+            aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
+          >
+            {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+          </button>
         </div>
         <button
           onClick={handleNewChat}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 border border-gray-300 text-gray-700 hover:bg-gray-100 active:bg-gray-200 rounded-lg transition text-sm"
+          className={`w-full flex items-center ${collapsed ? 'justify-center' : 'justify-center gap-2'} px-3 py-2 border border-gray-300 text-gray-700 hover:bg-gray-100 active:bg-gray-200 rounded-lg transition text-sm`}
+          title="新建聊天"
         >
           <Plus size={16} />
-          新建聊天
+          {!collapsed && '新建聊天'}
         </button>
       </div>
 
       {/* 分类和聊天列表 */}
       <div className="flex-1 overflow-y-auto">
         {/* 聊天历史部分 */}
-        {conversations && conversations.length > 0 && (
+        {!collapsed && conversations && conversations.length > 0 && (
           <div className="px-3 py-4">
             {groupConversationsByDate(conversations).map((group) => (
               <div key={group.label} className="mb-4">
@@ -278,39 +290,42 @@ function Sidebar({ onPageChange, currentPage = 'chat' }: SidebarProps) {
       </div>
 
       {/* 底部按钮 */}
-      <div className="border-t border-gray-200 p-3 space-y-2">
+      <div className={`border-t border-gray-200 ${collapsed ? 'p-2' : 'p-3'} space-y-2`}>
         <button
           onClick={() => onPageChange?.('explorer')}
-          className={`w-full flex items-center gap-2 px-3 py-2 rounded transition text-sm ${
+          className={`w-full flex items-center ${collapsed ? 'justify-center' : 'gap-2'} px-3 py-2 rounded transition text-sm ${
             currentPage === 'explorer'
               ? 'bg-gray-200 text-gray-900'
               : 'text-gray-700 hover:bg-gray-100 active:bg-gray-200'
           }`}
+          title="提示词广场"
         >
           <Compass size={16} />
-          提示词广场
+          {!collapsed && '提示词广场'}
         </button>
         <button
           onClick={() => onPageChange?.('custom-tools')}
-          className={`w-full flex items-center gap-2 px-3 py-2 rounded transition text-sm ${
+          className={`w-full flex items-center ${collapsed ? 'justify-center' : 'gap-2'} px-3 py-2 rounded transition text-sm ${
             currentPage === 'custom-tools'
               ? 'bg-gray-200 text-gray-900'
               : 'text-gray-700 hover:bg-gray-100 active:bg-gray-200'
           }`}
+          title="自定义工具"
         >
           <Wrench size={16} />
-          自定义工具
+          {!collapsed && '自定义工具'}
         </button>
         <button
           onClick={() => onPageChange?.('settings')}
-          className={`w-full flex items-center gap-2 px-3 py-2 rounded transition text-sm ${
+          className={`w-full flex items-center ${collapsed ? 'justify-center' : 'gap-2'} px-3 py-2 rounded transition text-sm ${
             currentPage === 'settings'
               ? 'bg-gray-200 text-gray-900'
               : 'text-gray-700 hover:bg-gray-100 active:bg-gray-200'
           }`}
+          title="设置"
         >
           <Settings size={16} />
-          设置
+          {!collapsed && '设置'}
         </button>
       </div>
 
