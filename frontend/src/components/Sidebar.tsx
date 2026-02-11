@@ -61,29 +61,12 @@ function Sidebar({ onPageChange, currentPage = 'chat' }: SidebarProps) {
   const [menuModalConv, setMenuModalConv] = useState<any>(null)
   const [collapsed, setCollapsed] = useState(false)
 
-  const handleNewChat = async () => {
-    try {
-      // 创建不关联工具的对话（通用对话模式）
-      const response = await apiClient.createConversation(null, `新聊天 - ${new Date().toLocaleString()}`)
-      const newConversation = response.data
-      
-      // 更新对话列表
-      setConversations(prev => [newConversation, ...prev])
-      
-      // 设置当前对话
-      setCurrentConversation(newConversation)
-      
-      // 清空消息
-      setMessages([])
-      
-      // 清空当前工具（通用模式）
-      setCurrentTool(null)
-      
-      addToast('新聊天已创建', 'success')
-    } catch (error) {
-      console.error('Failed to create new chat:', error)
-      addToast('创建失败', 'error')
-    }
+  const handleNewChat = () => {
+    // 仅切换到空白输入态；真正创建会话在首次发送时完成
+    onPageChange?.('chat')
+    setCurrentConversation(null)
+    setMessages([])
+    setCurrentTool(null)
   }
 
   const handleSelectConversation = async (conversation: any) => {

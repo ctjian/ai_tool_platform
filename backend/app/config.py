@@ -1,6 +1,6 @@
 """应用配置"""
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, model_validator
 from typing import List
 from pathlib import Path
 
@@ -47,6 +47,35 @@ class Settings(BaseSettings):
     # 日志配置
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "./logs/app.log"
+
+    @model_validator(mode="before")
+    @classmethod
+    def treat_empty_env_as_unset(cls, data):
+        """
+        将空字符串环境变量按“未配置”处理。
+        这样 .env 中留空不会覆盖默认值，也避免复杂类型解析报错。
+        """
+        if not isinstance(data, dict):
+            return data
+
+        cleaned = dict(data)
+        for field_name, field in cls.model_fields.items():
+            default = field.default
+
+            # 仅当字段本身有可用默认值时，空字符串才回退到默认值
+            if default in (None, ""):
+                continue
+
+            keys = {field_name}
+            alias = field.validation_alias
+            if isinstance(alias, str):
+                keys.add(alias)
+
+            for key in keys:
+                if cleaned.get(key) == "":
+                    cleaned.pop(key, None)
+
+        return cleaned
     
     @property
     def cors_origins_list(self) -> List[str]:

@@ -232,21 +232,11 @@ function ChatWindow() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentConversation?.id])
 
-  // 创建新对话
-  const handleNewConversation = async () => {
+  // 创建新对话（仅重置为新会话态，首次发送时再落库）
+  const handleNewConversation = () => {
     if (!currentTool) return
-
-    try {
-      const res = await apiClient.createConversation(
-        currentTool.id,
-        `${currentTool.name} - ${new Date().toLocaleString()}`
-      )
-      setCurrentConversation(res.data)
-      setMessages([])
-      setConversations(prev => [...prev, res.data])
-    } catch (error) {
-      console.error('Failed to create conversation:', error)
-    }
+    setCurrentConversation(null)
+    setMessages([])
   }
 
   // 导出对话

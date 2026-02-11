@@ -3,7 +3,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import AsyncGenerator, Optional, Dict
-import os
 import asyncio
 import json
 
@@ -21,7 +20,6 @@ router = APIRouter()
 
 # 全局字典存储正在进行的流式请求（用于停止功能）
 active_streams = {}
-DEBUG_THINKING = os.getenv("DEBUG_THINKING") == "1"
 
 
 
@@ -232,12 +230,6 @@ async def generate_chat_stream(
                     )
             cost_meta_json = json.dumps(cost_meta, ensure_ascii=False) if cost_meta else None
             thinking_text = thinking_response if thinking_response else None
-            if DEBUG_THINKING:
-                print(
-                    f"[thinking] done model={api_config.model} "
-                    f"thinking_len={len(thinking_response)} "
-                    f"has_usage={bool(usage_data)}"
-                )
 
             if retry_message_id:
                 update_msg = await message_crud.get(chat_db, retry_message_id)
@@ -287,8 +279,6 @@ async def generate_chat_stream(
                 thinking_response += thinking_chunk
                 thinking_data = json.dumps({"content": thinking_chunk})
                 yield f"event: thinking\ndata: {thinking_data}\n\n"
-                if DEBUG_THINKING and thinking_chunk:
-                    print(f"[thinking] chunk_len={len(thinking_chunk)} total_len={len(thinking_response)}")
                 continue
             
             if event.get("type") != "token":
