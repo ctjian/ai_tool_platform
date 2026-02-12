@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import AsyncGenerator, Optional, Dict
 import asyncio
 import json
+import logging
 
 from app.database import get_session, get_chat_session
 from app.crud.conversation import conversation_crud, message_crud
@@ -15,8 +16,11 @@ from app.utils.chat2api_helper import stream_chat2api_completion
 from app.utils.pricing import compute_text_cost
 from app.utils.system_prompt import get_default_system_prompt, pick_system_prompt
 from app.config import settings
+from app.services.pipeline.paper_pipeline import ArxivPipelineError, build_arxiv_context_for_message
+from app.services.sources.arxiv.id_parser import MultipleArxivReferencesError
 
 router = APIRouter()
+logger = logging.getLogger("uvicorn.error")
 
 # 全局字典存储正在进行的流式请求（用于停止功能）
 active_streams = {}
@@ -141,13 +145,46 @@ async def generate_chat_stream(
                         "role": msg.role,
                         "content": get_message_content(msg, selected_versions)
                     })
-        
+
+        user_message_for_model = user_message
+        if not retry_message_id:
+            try:
+                arxiv_context = await asyncio.to_thread(
+                    build_arxiv_context_for_message,
+                    user_message,
+                    settings,
+                )
+            except MultipleArxivReferencesError as exc:
+                error_data = json.dumps({"error": str(exc)})
+                yield f"event: error\ndata: {error_data}\n\n"
+                return
+            except ArxivPipelineError as exc:
+                error_data = json.dumps({"error": str(exc)})
+                yield f"event: error\ndata: {error_data}\n\n"
+                return
+
+            if arxiv_context:
+                openai_messages.append(
+                    {
+                        "role": "system",
+                        "content": arxiv_context.context_prompt,
+                    }
+                )
+                user_message_for_model = arxiv_context.query_text or user_message
+                logger.info(
+                    "chat-arxiv-injected paper_id=%s query=%s",
+                    arxiv_context.target.paper_id,
+                    (user_message_for_model or "")[:180],
+                )
+            elif "arxiv.org" in (user_message or "").lower():
+                logger.info("chat-arxiv-skipped reason=not-in-head-or-tail-window")
+
         # 添加当前用户消息（支持图片）
         # 重试时不重复添加当前用户消息，避免重复输入
         if not retry_message_id:
             if user_images and len(user_images) > 0:
                 # 带图片的消息，使用 vision API 格式
-                content_parts = [{"type": "text", "text": user_message}] if user_message else []
+                content_parts = [{"type": "text", "text": user_message_for_model}] if user_message_for_model else []
                 for img_data in user_images:
                     content_parts.append({
                         "type": "image_url",
@@ -163,7 +200,7 @@ async def generate_chat_stream(
                 # 纯文本消息
                 openai_messages.append({
                     "role": "user",
-                    "content": user_message
+                    "content": user_message_for_model
                 })
         
         # 5. 如果不是重试，使用 chat_db 保存用户消息到数据库

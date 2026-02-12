@@ -48,6 +48,26 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "./logs/app.log"
 
+    # 论文解析（arXiv + GROBID）
+    GROBID_URL: str = "https://lfoppiano-grobid.hf.space"
+    PAPER_DATA_DIR: str = str(Path(__file__).resolve().parents[1] / "data" / "papers")
+    ARXIV_WINDOW_CHARS: int = 100  # 仅在首尾窗口提取 arXiv 引用
+    ARXIV_CONTEXT_TOP_K: int = 8
+    ARXIV_CONTEXT_MAX_CHARS: int = 12000
+    ARXIV_DOWNLOAD_TIMEOUT_SEC: int = 30
+    GROBID_TIMEOUT_SEC: int = 120
+    ARXIV_CHUNK_TARGET_TOKENS: int = 900
+    ARXIV_CHUNK_MAX_TOKENS: int = 1200
+    ARXIV_CHUNK_OVERLAP_TOKENS: int = 120
+    ARXIV_CHUNK_MIN_TOKENS: int = 120
+
+    # Embedding 检索（SiliconFlow）
+    EMBEDDING_BASE_URL: str = "https://api.siliconflow.cn/v1"
+    EMBEDDING_API_KEY: str = ""
+    EMBEDDING_MODEL: str = "Pro/BAAI/bge-m3"
+    EMBEDDING_TIMEOUT_SEC: int = 60
+    EMBEDDING_BATCH_SIZE: int = 16
+
     @model_validator(mode="before")
     @classmethod
     def treat_empty_env_as_unset(cls, data):
