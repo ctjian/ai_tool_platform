@@ -40,6 +40,7 @@ from app.services.sources.arxiv.id_parser import (
     extract_arxiv_targets,
     remove_detected_arxiv_references,
 )
+from app.services.sources.arxiv.source_to_markdown import parse_arxiv_source_to_markdown
 from app.services.sources.arxiv.tei_to_markdown import tei_to_markdown
 
 logger = logging.getLogger("uvicorn.error")
@@ -274,42 +275,94 @@ def _prepare_parsed_files(
             cached=True,
         )
 
-    if not paths.tei_path.exists():
-        started = time.perf_counter()
-        _emit_progress(
-            progress_callback,
-            key="parse_pdf",
-            status="running",
-            message=f"正在解析 PDF（GROBID）：{filename}",
+    parsed = None
+    parse_engine = "source_latex"
+    parse_meta: Dict[str, object] = {}
+    source_fallback_reason = ""
+
+    started = time.perf_counter()
+    _emit_progress(
+        progress_callback,
+        key="parse_source",
+        status="running",
+        message=f"正在解析 LaTeX 源码：{filename}",
+        paper_id=target.paper_id,
+        filename=filename,
+    )
+    try:
+        parsed, source_meta = parse_arxiv_source_to_markdown(
             paper_id=target.paper_id,
-            filename=filename,
+            canonical_id=target.canonical_id,
+            paper_dir=paths.paper_dir,
+            markdown_path=paths.markdown_path,
+            timeout_sec=settings.ARXIV_DOWNLOAD_TIMEOUT_SEC,
         )
-        parse_pdf_to_tei(
-            pdf_path=paths.pdf_path,
-            tei_path=paths.tei_path,
-            service_url=settings.GROBID_URL,
-            timeout_sec=settings.GROBID_TIMEOUT_SEC,
-        )
+        parse_meta["latex_source"] = source_meta
         _emit_progress(
             progress_callback,
-            key="parse_pdf",
+            key="parse_source",
             status="done",
-            message=f"PDF 解析完成：{filename}",
+            message=f"LaTeX 源码解析完成：{filename}",
             paper_id=target.paper_id,
             filename=filename,
             elapsed_ms=int((time.perf_counter() - started) * 1000),
         )
-    else:
+    except Exception as exc:
+        parse_engine = "grobid"
+        source_fallback_reason = str(exc)
         _emit_progress(
             progress_callback,
-            key="parse_pdf",
-            status="done",
-            message=f"复用解析结果（TEI）：{filename}",
+            key="parse_source",
+            status="error",
+            message=f"LaTeX 源码解析失败，回退 GROBID：{filename}",
             paper_id=target.paper_id,
             filename=filename,
-            elapsed_ms=0,
-            cached=True,
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
         )
+
+    if parsed is None:
+        if not paths.tei_path.exists():
+            started = time.perf_counter()
+            _emit_progress(
+                progress_callback,
+                key="parse_pdf",
+                status="running",
+                message=f"正在解析 PDF（GROBID）：{filename}",
+                paper_id=target.paper_id,
+                filename=filename,
+            )
+            parse_pdf_to_tei(
+                pdf_path=paths.pdf_path,
+                tei_path=paths.tei_path,
+                service_url=settings.GROBID_URL,
+                timeout_sec=settings.GROBID_TIMEOUT_SEC,
+            )
+            _emit_progress(
+                progress_callback,
+                key="parse_pdf",
+                status="done",
+                message=f"PDF 解析完成：{filename}",
+                paper_id=target.paper_id,
+                filename=filename,
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+            )
+        else:
+            _emit_progress(
+                progress_callback,
+                key="parse_pdf",
+                status="done",
+                message=f"复用解析结果（TEI）：{filename}",
+                paper_id=target.paper_id,
+                filename=filename,
+                elapsed_ms=0,
+                cached=True,
+            )
+        parsed = tei_to_markdown(paths.tei_path, paths.markdown_path)
+        parse_meta["grobid"] = {
+            "service_url": settings.GROBID_URL,
+            "parsed_at": _now_iso(),
+            "tei_path": str(paths.tei_path),
+        }
 
     started = time.perf_counter()
     _emit_progress(
@@ -320,7 +373,6 @@ def _prepare_parsed_files(
         paper_id=target.paper_id,
         filename=filename,
     )
-    parsed = tei_to_markdown(paths.tei_path, paths.markdown_path)
     strategy = {
         "mode": "section_then_split",
         "target_tokens": settings.ARXIV_CHUNK_TARGET_TOKENS,
@@ -362,10 +414,9 @@ def _prepare_parsed_files(
             "sha256": pdf_sha256 or "",
             "downloaded_url": downloaded_url or "",
         },
-        "grobid": {
-            "service_url": settings.GROBID_URL,
-            "parsed_at": _now_iso(),
-            "tei_path": str(paths.tei_path),
+        "parse": {
+            "engine": parse_engine,
+            "updated_at": _now_iso(),
         },
         "markdown": {
             "path": str(paths.markdown_path),
@@ -392,6 +443,12 @@ def _prepare_parsed_files(
         "status": "ready",
         "updated_at": _now_iso(),
     }
+    if source_fallback_reason:
+        meta["parse"]["source_fallback_reason"] = source_fallback_reason
+    if parse_meta.get("latex_source"):
+        meta["latex_source"] = parse_meta["latex_source"]
+    if parse_meta.get("grobid"):
+        meta["grobid"] = parse_meta["grobid"]
     save_meta(paths, meta)
 
 

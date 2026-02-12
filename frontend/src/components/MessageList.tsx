@@ -247,6 +247,20 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
                     return ao - bo
                   })
                 : []
+              const hasArxivStatus = statusSteps.some((step: any) => {
+                const key = String(step?.key || '')
+                return [
+                  'arxiv_detected',
+                  'download_pdf',
+                  'parse_source',
+                  'parse_pdf',
+                  'chunk_paper',
+                  'paper_ready',
+                  'embed_chunks',
+                  'retrieve_chunks',
+                  'retrieval_ready',
+                ].includes(key)
+              })
               const hasThinking = msg.role === 'assistant' && (msg.thinking && msg.thinking.trim().length > 0)
               const showThinking = msg.role === 'assistant' && (hasThinking || isWaiting)
               const thinkingCollapsed = msg.thinking_collapsed ?? true
@@ -333,9 +347,9 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
                           <div className="mt-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 shadow-sm">
                             <div className="flex items-center gap-2 text-gray-800 font-medium">
                               <Loader2 size={15} className="animate-spin" />
-                              <span>论文检索处理中</span>
+                              <span>{hasArxivStatus ? '论文检索处理中' : '正在生成回答'}</span>
                             </div>
-                            {statusSteps.length > 0 && (
+                            {hasArxivStatus && statusSteps.length > 0 && (
                               <div className="mt-3 space-y-1.5">
                                 {statusSteps.map((step: any, idx: number) => {
                                   const status = String(step?.status || 'running')
