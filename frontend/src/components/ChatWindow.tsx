@@ -1,11 +1,14 @@
+// Review note:
+// - 输入框上方展示 active papers（可打开 PDF，可单独 x 取消激活）。
+// - 右侧资源面板展示会话 registry，可重新激活被误删的 paper。
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useAppStore } from '../store/app'
 import apiClient from '../api/client'
 import MessageList from './MessageList'
 import ChatInput from './ChatInput'
-import { Plus, Download, ChevronDown, Check, FileText, X, Copy, AlertCircle } from 'lucide-react'
+import { Plus, Download, ChevronDown, Check, FileText, X, Copy, AlertCircle, Library } from 'lucide-react'
 import { addToast } from './ui'
-import { Message } from '../types/api'
+import { ConversationPapersState, Message } from '../types/api'
 
 interface ImageFile {
   file: File
@@ -77,8 +80,14 @@ function ChatWindow() {
   const [isStreaming, setIsStreaming] = useState(false)
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false)
   const [promptPanelOpen, setPromptPanelOpen] = useState(false)
+  const [paperPanelOpen, setPaperPanelOpen] = useState(false)
+  const [focusedPaperId, setFocusedPaperId] = useState<string | null>(null)
   const [systemPromptDraft, setSystemPromptDraft] = useState('')
   const [promptSaving, setPromptSaving] = useState(false)
+  const [paperState, setPaperState] = useState<ConversationPapersState>({
+    active_ids: [],
+    papers: [],
+  })
   const [selectedVendor, setSelectedVendor] = useState<string>('')
   const vendorOffsetPx = useMemo(() => {
     if (availableModelGroups.length === 0) return 0
@@ -108,6 +117,46 @@ function ChatWindow() {
     () => messages.some((m) => m.role !== 'system'),
     [messages]
   )
+  const activePapers = useMemo(
+    () => (paperState.papers || []).filter((p) => p.is_active),
+    [paperState]
+  )
+
+  const refreshConversationPapers = useCallback(async (convId?: string | null) => {
+    if (!convId) {
+      setPaperState({ active_ids: [], papers: [] })
+      return
+    }
+    try {
+      const res = await apiClient.getConversationPapers(convId)
+      setPaperState(res.data || { active_ids: [], papers: [] })
+    } catch (error) {
+      console.error('Failed to load conversation papers:', error)
+      setPaperState({ active_ids: [], papers: [] })
+    }
+  }, [])
+
+  const handleDeactivatePaper = useCallback(async (canonicalId: string) => {
+    if (!currentConversation?.id) return
+    try {
+      const res = await apiClient.deactivateConversationPaper(currentConversation.id, canonicalId)
+      setPaperState(res.data || { active_ids: [], papers: [] })
+    } catch (error) {
+      console.error('Failed to deactivate paper:', error)
+      addToast('取消激活失败', 'error')
+    }
+  }, [currentConversation?.id])
+
+  const handleActivatePaper = useCallback(async (canonicalId: string) => {
+    if (!currentConversation?.id) return
+    try {
+      const res = await apiClient.activateConversationPapers(currentConversation.id, [canonicalId])
+      setPaperState(res.data || { active_ids: [], papers: [] })
+    } catch (error) {
+      console.error('Failed to activate paper:', error)
+      addToast('激活失败', 'error')
+    }
+  }, [currentConversation?.id])
 
   useEffect(() => {
     isStreamingRef.current = isStreaming
@@ -232,21 +281,15 @@ function ChatWindow() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentConversation?.id])
 
-  // 创建新对话
-  const handleNewConversation = async () => {
-    if (!currentTool) return
+  useEffect(() => {
+    refreshConversationPapers(currentConversation?.id ?? null)
+  }, [currentConversation?.id, refreshConversationPapers])
 
-    try {
-      const res = await apiClient.createConversation(
-        currentTool.id,
-        `${currentTool.name} - ${new Date().toLocaleString()}`
-      )
-      setCurrentConversation(res.data)
-      setMessages([])
-      setConversations(prev => [...prev, res.data])
-    } catch (error) {
-      console.error('Failed to create conversation:', error)
-    }
+  // 创建新对话（仅重置为新会话态，首次发送时再落库）
+  const handleNewConversation = () => {
+    if (!currentTool) return
+    setCurrentConversation(null)
+    setMessages([])
   }
 
   // 导出对话
@@ -269,14 +312,11 @@ function ChatWindow() {
 
   // 停止生成
   const handleStopGeneration = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      setIsStreaming(false)
-      setChatLoading(false)
-      addToast('已停止生成', 'info')
-      if (currentConversation?.id) {
-        apiClient.stopChat(currentConversation.id).catch(() => {})
-      }
+    setIsStreaming(false)
+    setChatLoading(false)
+    addToast('已停止生成', 'info')
+    if (currentConversation?.id) {
+      apiClient.stopChat(currentConversation.id).catch(() => {})
     }
   }
 
@@ -418,6 +458,7 @@ function ChatWindow() {
       let assistantMessageId = retryMessageId || ''
       let assistantCreated = !!retryMessageId // 只有重试时才认为已创建（不需要创建新消息）
       let thinkingBuffer = ''
+      let statusStepOrder = 0
       let pendingContent = ''
       let pendingThinking = ''
       const flushIntervalMs = 50
@@ -468,6 +509,7 @@ function ChatWindow() {
           conversation_id: conversationId,
           role: 'assistant' as const,
           content: '__waiting__',
+          extra: { status_steps: [] },
           thinking_collapsed: true,
           thinking_done: false,
           created_at: new Date().toISOString(),
@@ -481,6 +523,57 @@ function ChatWindow() {
           if (data && typeof data === 'object' && 'message_id' in data) {
             assistantMessageId = (data as any).message_id || assistantMessageId
           }
+          continue
+        } else if (event === 'status') {
+          const status = data && typeof data === 'object' ? (data as any) : null
+          if (!status) continue
+          const stepId = String(status.step_id || '')
+          const key = String(status.key || '')
+          const statusText = String(status.message || '')
+          if (!stepId || !statusText) continue
+          const statusKind = String(status.status || 'running')
+          const elapsedMs = Number(status.elapsed_ms)
+          const elapsedSafe = Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : undefined
+          const filename = status.filename ? String(status.filename) : undefined
+          const paperId = status.paper_id ? String(status.paper_id) : undefined
+          const targetId = assistantCreated ? assistantMessageId : waitingMessageId
+          if (!targetId) continue
+
+          setMessages((msgs) => {
+            const msgIdx = msgs.findIndex((m) => m.id === targetId)
+            if (msgIdx < 0) return msgs
+            const updated = [...msgs]
+            const msg: any = { ...updated[msgIdx] }
+            const extra = { ...(msg.extra || {}) }
+            const oldSteps = Array.isArray(extra.status_steps) ? [...extra.status_steps] : []
+            const oldIdx = oldSteps.findIndex((s: any) => s && s.step_id === stepId)
+            if (oldIdx >= 0) {
+              oldSteps[oldIdx] = {
+                ...oldSteps[oldIdx],
+                key,
+                message: statusText,
+                status: statusKind,
+                elapsed_ms: elapsedSafe ?? oldSteps[oldIdx]?.elapsed_ms,
+                filename: filename ?? oldSteps[oldIdx]?.filename,
+                paper_id: paperId ?? oldSteps[oldIdx]?.paper_id,
+              }
+            } else {
+              oldSteps.push({
+                step_id: stepId,
+                key,
+                message: statusText,
+                status: statusKind,
+                elapsed_ms: elapsedSafe,
+                filename,
+                paper_id: paperId,
+                order: statusStepOrder++,
+              })
+            }
+            extra.status_steps = oldSteps
+            msg.extra = extra
+            updated[msgIdx] = msg
+            return updated
+          })
           continue
         } else if (event === 'thinking') {
           if (data && typeof data === 'object' && 'content' in data) {
@@ -605,6 +698,39 @@ function ChatWindow() {
           stopFlush()
           setIsStreaming(false)
           setChatLoading(false)
+          
+          if (data && typeof data === 'object' && 'message' in data) {
+            const completeMessage = (data as any).message
+            setMessages((msgs) => {
+              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
+              if (msgIdx >= 0) {
+                const updatedMsgs = [...msgs]
+                const prev = updatedMsgs[msgIdx] as any
+                updatedMsgs[msgIdx] = {
+                  ...completeMessage,
+                  thinking_collapsed: prev?.thinking_collapsed ?? (completeMessage.thinking ? true : undefined),
+                  thinking_done: true,
+                }
+                return updatedMsgs
+              }
+              return msgs
+            })
+            setVersionIndices({ ...versionIndices, [assistantMessageId]: 0 })
+          } else if (assistantMessageId) {
+            setMessages((msgs) => {
+              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
+              if (msgIdx >= 0) return msgs
+              const lastIdx = [...msgs].reverse().findIndex(m => m.role === 'assistant')
+              if (lastIdx >= 0) {
+                const realIdx = msgs.length - 1 - lastIdx
+                const updatedMsgs = [...msgs]
+                updatedMsgs[realIdx] = { ...updatedMsgs[realIdx], id: assistantMessageId }
+                return updatedMsgs
+              }
+              return msgs
+            })
+          }
+
           clearWaitingMessage()
           if (assistantMessageId) {
             setMessages((msgs) =>
@@ -639,6 +765,9 @@ function ChatWindow() {
 
       setIsStreaming(false)
       clearWaitingMessage()
+      if (conversationId) {
+        await refreshConversationPapers(conversationId)
+      }
 
       // 在第一次回复后自动生成标题（重试时不生成）
       if (shouldAutoTitle && conversationId && conversationTitle && !retryMessageId) {
@@ -777,6 +906,43 @@ function ChatWindow() {
     })
   }, [messages, chatLoading, versionIndices])
 
+  const renderActivePaperChips = () => {
+    if (!activePapers.length) return null
+    return (
+      <div className="mb-3 flex flex-wrap gap-2">
+        {activePapers.map((paper) => (
+          <div
+            key={paper.canonical_id}
+            className="group inline-flex items-center rounded-full border border-gray-200 bg-gray-50 pr-1"
+            title={paper.title || paper.paper_id}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setFocusedPaperId(paper.canonical_id)
+                setPaperPanelOpen(true)
+                window.setTimeout(() => {
+                  setFocusedPaperId((prev) => (prev === paper.canonical_id ? null : prev))
+                }, 1000)
+              }}
+              className="px-3 py-1.5 text-xs text-gray-800 hover:text-gray-900"
+            >
+              {paper.filename}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDeactivatePaper(paper.canonical_id)}
+              className="mr-1 h-5 w-5 rounded-full text-gray-500 transition hover:bg-gray-200 hover:text-gray-700"
+              title="取消激活"
+            >
+              <X size={12} className="mx-auto" />
+            </button>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
   return (
     <div className="flex-1 flex flex-col bg-white text-gray-900 h-full overflow-hidden relative min-h-0">
       {/* 工具栏 */}
@@ -792,7 +958,7 @@ function ChatWindow() {
             </>
           ) : (
             <>
-              <span className="text-2xl">💬</span>
+              {/* <span className="text-2xl">💬</span> */}
               <div>
                 <h2 className="font-bold text-gray-900">通用聊天</h2>
                 <p className="text-xs text-gray-600">与AI助手直接对话</p>
@@ -877,6 +1043,18 @@ function ChatWindow() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setPaperPanelOpen(true)}
+            className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 rounded-lg transition text-sm text-gray-600 hover:text-gray-900"
+          >
+            <Library size={18} />
+            资源
+            {paperState.papers.length > 0 && (
+              <span className="text-xs text-gray-500">
+                {activePapers.length}/{paperState.papers.length}
+              </span>
+            )}
+          </button>
+          <button
             onClick={() => setPromptPanelOpen(true)}
             className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 rounded-lg transition text-sm text-gray-600 hover:text-gray-900"
           >
@@ -929,6 +1107,7 @@ function ChatWindow() {
         <div className="flex-1 flex flex-col items-center justify-center px-4 pb-20">
           <h1 className="text-3xl font-semibold text-gray-800 mb-8">有什么可以帮忙的？</h1>
           <div className="w-full max-w-3xl">
+            {renderActivePaperChips()}
             <ChatInput
               value={inputValue}
               onChange={setInputValue}
@@ -954,6 +1133,7 @@ function ChatWindow() {
           </div>
           <div className="p-4 bg-white flex-shrink-0">
             <div className="max-w-3xl mx-auto">
+              {renderActivePaperChips()}
               <ChatInput
                 value={inputValue}
                 onChange={setInputValue}
@@ -973,6 +1153,89 @@ function ChatWindow() {
           </div>
         </>
       )}
+
+      {/* 资源面板：展示会话 registry，支持重新激活论文 */}
+      <div
+        className={`absolute inset-0 z-20 transition ${
+          paperPanelOpen ? 'bg-black/20' : 'pointer-events-none'
+        }`}
+        onClick={() => setPaperPanelOpen(false)}
+      />
+      <div
+        className={`absolute right-0 top-0 h-full w-[360px] max-w-[90vw] bg-white border-l border-gray-200 shadow-xl z-30 transform transition-transform duration-200 ${
+          paperPanelOpen ? 'translate-x-0' : 'translate-x-full'
+        }`}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900">会话资源</h3>
+            <p className="text-xs text-gray-500">显示当前会话涉及的全部论文，可手动激活/取消激活</p>
+          </div>
+          <button
+            onClick={() => setPaperPanelOpen(false)}
+            className="p-1 rounded hover:bg-gray-100 text-gray-500"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="p-4 h-[calc(100%-56px)] overflow-y-auto">
+          {!currentConversation && (
+            <div className="text-sm text-gray-500">请先发送一条消息创建会话。</div>
+          )}
+          {currentConversation && paperState.papers.length === 0 && (
+            <div className="text-sm text-gray-500">当前会话还没有论文资源。</div>
+          )}
+          <div className="space-y-3">
+            {paperState.papers.map((paper) => (
+              <div
+                key={paper.canonical_id}
+                className={`rounded-xl border bg-white p-3 transition hover:border-gray-300 hover:shadow-sm ${
+                  focusedPaperId === paper.canonical_id
+                    ? 'paper-focus-animate border-emerald-400 ring-2 ring-emerald-100'
+                    : 'border-gray-200'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <a
+                      href={paper.pdf_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sm font-semibold text-gray-900 hover:underline break-all"
+                    >
+                      {paper.filename}
+                    </a>
+                    <p className="mt-1 text-xs text-gray-500 break-all">
+                      {paper.title || `arXiv:${paper.paper_id}`}
+                    </p>
+                    <p className="mt-2 text-[11px] text-gray-400">arXiv:{paper.paper_id}</p>
+                  </div>
+                  <div className="flex flex-col items-end gap-1">
+                    <label className="inline-flex cursor-pointer items-center">
+                      <input
+                        type="checkbox"
+                        checked={paper.is_active}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            handleActivatePaper(paper.canonical_id)
+                          } else {
+                            handleDeactivatePaper(paper.canonical_id)
+                          }
+                        }}
+                        className="peer sr-only"
+                      />
+                      <span className="relative h-6 w-11 rounded-full bg-gray-200 transition peer-checked:bg-emerald-500 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-200 after:absolute after:left-0.5 after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:after:translate-x-5" />
+                    </label>
+                    <span className={`text-[11px] ${paper.is_active ? 'text-emerald-600' : 'text-gray-400'}`}>
+                      {paper.is_active ? '已激活' : '未激活'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
 
       {/* 系统提示词面板 - 方案A：右侧抽屉 */}
       <div

@@ -12,6 +12,11 @@ from app.schemas.config import (
 )
 from app.utils.openai_helper import test_openai_connection
 from app.config import settings
+from app.custom_tools.arxiv_translate.defaults import (
+    DEFAULT_CONCURRENCY,
+    DEFAULT_TARGET_LANGUAGE,
+    DEFAULT_TRANSLATE_MODEL,
+)
 
 router = APIRouter()
 
@@ -40,6 +45,13 @@ async def get_default_config():
         "base_url": settings.OPENAI_BASE_URL,
         "models": models,
         "model_groups": model_groups,
+        "custom_tool_defaults": {
+            "arxiv_translate": {
+                "target_language": DEFAULT_TARGET_LANGUAGE,
+                "concurrency": DEFAULT_CONCURRENCY,
+                "model": DEFAULT_TRANSLATE_MODEL,
+            }
+        },
     }
 
 

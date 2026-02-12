@@ -1,6 +1,10 @@
-import { useMemo, useState } from 'react'
+// Review note:
+// - 新增“Arxiv论文精细翻译”自定义工具页逻辑（提交任务、轮询状态、下载产物）。
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, Input, Button, Loading } from '../components/ui'
 import apiClient from '../api/client'
+import { useAppStore } from '../store/app'
+import { ArxivTranslateHistoryItem, ArxivTranslateJob } from '../types/api'
 
 interface CustomTool {
   id: string
@@ -13,7 +17,52 @@ interface DemoResponse {
   result: number
 }
 
+const ARXIV_DEFAULT_EXTRA_PROMPT = [
+  'If the term "agent" appears, translate it as "智能体"; "policy" as "策略"; "reward model" as "奖励模型"; "alignment" as "对齐".',
+  "Keep abbreviations unchanged at first mention, and append Chinese in parentheses (e.g., Distributionally Robust Optimization (DRO，分布鲁棒优化)).",
+  "Keep model names and benchmark names in English (e.g., GPT, Llama, MMLU, HellaSwag).",
+  "Do not modify LaTeX commands, equations, citation keys, labels, refs, or environment names.",
+  "Keep all numbers, percentages, units, and variable symbols unchanged.",
+  "Use formal and concise academic Chinese; avoid colloquial wording.",
+].join('\n')
+const ARXIV_DEFAULT_MODEL = 'gpt-4o-mini'
+
+let pdfJsLibPromise: Promise<any> | null = null
+
+const loadPdfJsLib = async () => {
+  if ((window as any).pdfjsLib) {
+    return (window as any).pdfjsLib
+  }
+  if (pdfJsLibPromise) {
+    return pdfJsLibPromise
+  }
+  pdfJsLibPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script')
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
+    script.async = true
+    script.onload = () => {
+      const lib = (window as any).pdfjsLib
+      if (!lib) {
+        reject(new Error('pdf.js 加载失败'))
+        return
+      }
+      lib.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
+      resolve(lib)
+    }
+    script.onerror = () => reject(new Error('pdf.js 脚本加载失败'))
+    document.body.appendChild(script)
+  })
+  return pdfJsLibPromise
+}
+
 export const CustomToolsPage = () => {
+  const {
+    apiConfig,
+    hasBackendApiKey,
+    availableModelGroups,
+    availableModels,
+  } = useAppStore()
   const tools = useMemo<CustomTool[]>(
     () => [
       {
@@ -28,6 +77,12 @@ export const CustomToolsPage = () => {
         description: '输入论文标题，输出标准 BibTeX 引用',
         icon: '📚',
       },
+      {
+        id: 'arxiv-latex-translate',
+        name: 'Arxiv论文精细翻译',
+        description: '输入 arXiv 链接/ID，基于 LaTeX 源码翻译并导出 PDF',
+        icon: '🧾',
+      },
     ],
     []
   )
@@ -41,8 +96,134 @@ export const CustomToolsPage = () => {
   const [output, setOutput] = useState<DemoResponse | null>(null)
   const [bibOutput, setBibOutput] = useState<string | null>(null)
   const [bibCandidates, setBibCandidates] = useState<{ title: string; bibtex: string }[]>([])
+  const [arxivInput, setArxivInput] = useState('')
+  const [arxivTargetLang, setArxivTargetLang] = useState('中文')
+  const [arxivExtraPrompt, setArxivExtraPrompt] = useState(ARXIV_DEFAULT_EXTRA_PROMPT)
+  const [arxivAllowCache, setArxivAllowCache] = useState(true)
+  const [arxivConcurrency, setArxivConcurrency] = useState('16')
+  const [arxivModelGroup, setArxivModelGroup] = useState('')
+  const [arxivModel, setArxivModel] = useState('')
+  const [arxivJob, setArxivJob] = useState<ArxivTranslateJob | null>(null)
+  const [arxivHistory, setArxivHistory] = useState<ArxivTranslateHistoryItem[]>([])
+  const [expandedHistoryJobId, setExpandedHistoryJobId] = useState<string | null>(null)
+  const [compareOpen, setCompareOpen] = useState(false)
+  const [compareLeftUrl, setCompareLeftUrl] = useState('')
+  const [compareRightUrl, setCompareRightUrl] = useState('')
+  const [compareTitle, setCompareTitle] = useState('')
+  const [compareError, setCompareError] = useState('')
+  const [compareLeftLoading, setCompareLeftLoading] = useState(false)
+  const [compareRightLoading, setCompareRightLoading] = useState(false)
+  const leftPdfRef = useRef<HTMLDivElement | null>(null)
+  const rightPdfRef = useRef<HTMLDivElement | null>(null)
+  const syncLockRef = useRef(false)
+  const renderTokenRef = useRef(0)
 
   const selectedTool = tools.find((t) => t.id === selectedToolId) || null
+  const modelGroupOptions = availableModelGroups || []
+  const fallbackModelOptions = availableModels || []
+  const currentGroupModels = useMemo(() => {
+    if (!modelGroupOptions.length) return []
+    const group = modelGroupOptions.find((g) => g.name === arxivModelGroup)
+    return group?.models || []
+  }, [modelGroupOptions, arxivModelGroup])
+
+  const refreshArxivHistory = async () => {
+    try {
+      const res = await apiClient.listArxivTranslateJobs(40, 'succeeded')
+      setArxivHistory(res.data.items || [])
+    } catch (error) {
+      console.error('Failed to load arxiv history jobs:', error)
+      setArxivHistory([])
+    }
+  }
+
+  const restoreActiveArxivJob = async () => {
+    try {
+      const res = await apiClient.listArxivTranslateJobs(1, 'queued,running')
+      const active = (res.data.items || [])[0]
+      if (!active?.job_id) {
+        return
+      }
+      const detail = await apiClient.getArxivTranslateJob(active.job_id)
+      setArxivJob(detail.data)
+      if ((detail.data.input_text || '').trim()) {
+        setArxivInput(detail.data.input_text)
+      }
+    } catch (error) {
+      console.error('Failed to restore active arxiv translation job:', error)
+    }
+  }
+
+  useEffect(() => {
+    if (!arxivJob) return
+    if (!['queued', 'running'].includes(arxivJob.status)) return
+
+    const timer = window.setInterval(async () => {
+      try {
+        const res = await apiClient.getArxivTranslateJob(arxivJob.job_id)
+        setArxivJob(res.data)
+      } catch (error) {
+        console.error('Failed to poll arxiv translation job:', error)
+      }
+    }, 1800)
+
+    return () => window.clearInterval(timer)
+  }, [arxivJob])
+
+  useEffect(() => {
+    if (selectedToolId !== 'arxiv-latex-translate') return
+    refreshArxivHistory()
+    restoreActiveArxivJob()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedToolId])
+
+  useEffect(() => {
+    if (selectedToolId !== 'arxiv-latex-translate') return
+    if (!arxivJob) return
+    if (['queued', 'running'].includes(arxivJob.status)) return
+    refreshArxivHistory()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arxivJob?.job_id, arxivJob?.status, selectedToolId])
+
+  useEffect(() => {
+    const preferredModel = ARXIV_DEFAULT_MODEL
+    const currentModel = arxivModel || preferredModel || apiConfig.model
+    if (modelGroupOptions.length > 0) {
+      const matchedGroup =
+        modelGroupOptions.find((g) => g.models.includes(currentModel)) ||
+        modelGroupOptions.find((g) => g.models.includes(apiConfig.model))
+      const nextGroup = matchedGroup?.name || modelGroupOptions[0]?.name || ''
+      if (!arxivModelGroup || !modelGroupOptions.some((g) => g.name === arxivModelGroup)) {
+        setArxivModelGroup(nextGroup)
+        return
+      }
+      const groupModels = modelGroupOptions.find((g) => g.name === arxivModelGroup)?.models || []
+      if (!arxivModel || !groupModels.includes(arxivModel)) {
+        const nextModel = groupModels.includes(preferredModel)
+          ? preferredModel
+          : groupModels.includes(apiConfig.model)
+            ? apiConfig.model
+            : (groupModels.includes(currentModel) ? currentModel : groupModels[0])
+        setArxivModel(nextModel || '')
+      }
+      return
+    }
+
+    if ((!arxivModel || !fallbackModelOptions.includes(arxivModel)) && fallbackModelOptions.length > 0) {
+      const next = fallbackModelOptions.includes(preferredModel)
+        ? preferredModel
+        : fallbackModelOptions.includes(apiConfig.model)
+          ? apiConfig.model
+          : (fallbackModelOptions.includes(currentModel) ? currentModel : fallbackModelOptions[0])
+      setArxivModel(next || '')
+    }
+  }, [
+    apiConfig.model,
+    arxivModel,
+    arxivModelGroup,
+    fallbackModelOptions,
+    modelGroupOptions,
+  ])
 
   const handleRun = async () => {
     if (!selectedTool) return
@@ -67,14 +248,174 @@ export const CustomToolsPage = () => {
         })
         setBibOutput(res.data.bibtex || null)
         setBibCandidates(res.data.candidates || [])
+      } else if (selectedTool.id === 'arxiv-latex-translate') {
+        const res = await apiClient.createArxivTranslateJob({
+          input_text: arxivInput.trim(),
+          api_key: apiConfig.api_key || undefined,
+          base_url: apiConfig.base_url || undefined,
+          model: arxivModel || ARXIV_DEFAULT_MODEL || apiConfig.model || undefined,
+          target_language: arxivTargetLang,
+          extra_prompt: arxivExtraPrompt,
+          allow_cache: arxivAllowCache,
+          concurrency: Number(arxivConcurrency) || 2,
+        })
+        setArxivJob(res.data)
+        if (!['queued', 'running'].includes(res.data.status)) {
+          refreshArxivHistory()
+        }
       }
     } catch (error) {
       console.error('Failed to run custom tool:', error)
       setOutput(null)
       setBibOutput(null)
       setBibCandidates([])
+      setArxivJob(null)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleCancelArxivJob = async () => {
+    if (!arxivJob) return
+    try {
+      setLoading(true)
+      const res = await apiClient.cancelArxivTranslateJob(arxivJob.job_id)
+      setArxivJob(res.data)
+    } catch (error) {
+      console.error('Failed to cancel arxiv translation job:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const translatedChunks = Number(arxivJob?.meta?.translated_chunks || 0)
+  const totalChunks = Number(arxivJob?.meta?.total_chunks || 0)
+  const progressPercent =
+    totalChunks > 0 ? Math.min(100, Math.max(0, Math.round((translatedChunks / totalChunks) * 100))) : 0
+
+  const getArtifactUrl = (url: string) => {
+    if (!url) return '#'
+    if (/^https?:\/\//i.test(url)) return url
+    return url.startsWith('/') ? url : `/${url}`
+  }
+
+  const getArtifactByName = (item: ArxivTranslateHistoryItem, name: string) =>
+    (item.artifacts || []).find((a) => a.name === name)
+
+  const renderPdfToPane = async (url: string, container: HTMLDivElement, token: number) => {
+    const lib = await loadPdfJsLib()
+    if (token !== renderTokenRef.current) return
+
+    container.innerHTML = ''
+    const content = document.createElement('div')
+    content.className = 'space-y-2 p-2'
+    container.appendChild(content)
+
+    const loadingTask = lib.getDocument({ url, withCredentials: false })
+    const pdf = await loadingTask.promise
+    if (token !== renderTokenRef.current) return
+
+    const paneWidth = Math.max(320, container.clientWidth - 16)
+    for (let pageNo = 1; pageNo <= pdf.numPages; pageNo += 1) {
+      if (token !== renderTokenRef.current) return
+      const page = await pdf.getPage(pageNo)
+      const viewport = page.getViewport({ scale: 1 })
+      const scale = paneWidth / viewport.width
+      const scaled = page.getViewport({ scale })
+      const dpr = Math.max(1, window.devicePixelRatio || 1)
+
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.floor(scaled.width * dpr)
+      canvas.height = Math.floor(scaled.height * dpr)
+      canvas.style.width = `${scaled.width}px`
+      canvas.style.height = `${scaled.height}px`
+      canvas.className = 'mx-auto bg-white shadow-sm'
+      const ctx = canvas.getContext('2d')
+      if (!ctx) continue
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      await page.render({ canvasContext: ctx, viewport: scaled }).promise
+      content.appendChild(canvas)
+    }
+  }
+
+  const handleOpenCompare = (item: ArxivTranslateHistoryItem) => {
+    const translatedPdf = item.translated_pdf_url || getArtifactByName(item, 'translate_zh.pdf')?.url || ''
+    const originalPdf =
+      item.original_pdf_url || (item.paper_id ? `https://arxiv.org/pdf/${item.paper_id}.pdf` : '')
+    if (!translatedPdf || !originalPdf) {
+      setCompareError('当前任务缺少对照所需 PDF。')
+      return
+    }
+    setCompareError('')
+    setCompareTitle(item.task_name || `arXiv:${item.paper_id || item.job_id}`)
+    setCompareLeftUrl(getArtifactUrl(originalPdf))
+    setCompareRightUrl(getArtifactUrl(translatedPdf))
+    setCompareOpen(true)
+  }
+
+  const syncPaneScroll = (from: HTMLDivElement | null, to: HTMLDivElement | null) => {
+    if (!from || !to || syncLockRef.current) return
+    const fromMax = from.scrollHeight - from.clientHeight
+    const toMax = to.scrollHeight - to.clientHeight
+    const ratio = fromMax > 0 ? from.scrollTop / fromMax : 0
+    syncLockRef.current = true
+    to.scrollTop = toMax > 0 ? ratio * toMax : 0
+    window.requestAnimationFrame(() => {
+      syncLockRef.current = false
+    })
+  }
+
+  useEffect(() => {
+    if (!compareOpen) return
+    if (!leftPdfRef.current || !rightPdfRef.current) return
+    if (!compareLeftUrl || !compareRightUrl) return
+
+    const token = renderTokenRef.current + 1
+    renderTokenRef.current = token
+    setCompareError('')
+    setCompareLeftLoading(true)
+    setCompareRightLoading(true)
+
+    renderPdfToPane(compareLeftUrl, leftPdfRef.current, token)
+      .catch(() => {
+        setCompareError('原文 PDF 加载失败，请稍后重试。')
+      })
+      .finally(() => {
+        if (token === renderTokenRef.current) setCompareLeftLoading(false)
+      })
+
+    renderPdfToPane(compareRightUrl, rightPdfRef.current, token)
+      .catch(() => {
+        setCompareError((prev) => prev || '译文 PDF 加载失败，请稍后重试。')
+      })
+      .finally(() => {
+        if (token === renderTokenRef.current) setCompareRightLoading(false)
+      })
+
+    return () => {
+      renderTokenRef.current += 1
+    }
+  }, [compareOpen, compareLeftUrl, compareRightUrl])
+
+  const getStepStatusUi = (status: string) => {
+    if (status === 'done') {
+      return {
+        icon: '✓',
+        ring: 'bg-emerald-100 text-emerald-700',
+        text: 'text-gray-800',
+      }
+    }
+    if (status === 'error') {
+      return {
+        icon: '✗',
+        ring: 'bg-red-100 text-red-700',
+        text: 'text-red-700',
+      }
+    }
+    return {
+      icon: '…',
+      ring: 'bg-sky-100 text-sky-700',
+      text: 'text-gray-700',
     }
   }
 
@@ -97,6 +438,9 @@ export const CustomToolsPage = () => {
                   setOutput(null)
                   setBibOutput(null)
                   setBibCandidates([])
+                  setArxivJob(null)
+                  setArxivHistory([])
+                  setExpandedHistoryJobId(null)
                 }}
               >
                 <CardContent className="p-4 flex flex-col h-full">
@@ -120,6 +464,8 @@ export const CustomToolsPage = () => {
               onClick={() => {
                 setSelectedToolId(null)
                 setOutput(null)
+                setArxivHistory([])
+                setExpandedHistoryJobId(null)
               }}
             >
               ← 返回列表
@@ -169,14 +515,144 @@ export const CustomToolsPage = () => {
                   />
                 </div>
               )}
-              <div>
+              {selectedTool.id === 'arxiv-latex-translate' && (
+                <div className="space-y-3">
+                  {modelGroupOptions.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">模型分组</label>
+                        <select
+                          value={arxivModelGroup}
+                          onChange={(e) => {
+                            const groupName = e.target.value
+                            setArxivModelGroup(groupName)
+                            const models = modelGroupOptions.find((g) => g.name === groupName)?.models || []
+                            setArxivModel(models[0] || '')
+                          }}
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
+                        >
+                          {modelGroupOptions.map((group) => (
+                            <option key={group.name} value={group.name}>
+                              {group.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">翻译模型</label>
+                        <select
+                          value={arxivModel}
+                          onChange={(e) => setArxivModel(e.target.value)}
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
+                        >
+                          {currentGroupModels.map((model) => (
+                            <option key={model} value={model}>
+                              {model}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">翻译模型</label>
+                      <select
+                        value={arxivModel}
+                        onChange={(e) => setArxivModel(e.target.value)}
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
+                      >
+                        {fallbackModelOptions.map((model) => (
+                          <option key={model} value={model}>
+                            {model}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <Input
+                    label="arXiv 链接 / ID"
+                    value={arxivInput}
+                    onChange={(e) => setArxivInput(e.target.value)}
+                    placeholder="例如：https://arxiv.org/abs/2402.13228"
+                  />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <Input
+                      label="目标语言"
+                      value={arxivTargetLang}
+                      onChange={(e) => setArxivTargetLang(e.target.value)}
+                      placeholder="中文"
+                    />
+                    <Input
+                      label="并发数 (1-16)"
+                      type="number"
+                      value={arxivConcurrency}
+                      onChange={(e) => setArxivConcurrency(e.target.value)}
+                      placeholder="16"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      额外翻译要求（默认已填充）
+                    </label>
+                    <textarea
+                      value={arxivExtraPrompt}
+                      onChange={(e) => setArxivExtraPrompt(e.target.value)}
+                      rows={7}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      placeholder='例如：术语"agent"统一翻译为"智能体"'
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={arxivAllowCache}
+                      onChange={(e) => setArxivAllowCache(e.target.checked)}
+                    />
+                    允许缓存（命中同论文历史结果时可快速返回）
+                  </label>
+                  {!apiConfig.api_key && !hasBackendApiKey && (
+                    <div className="text-xs text-yellow-700">
+                      未检测到 API Key；请先在设置页配置，或在后端 .env 配置 OPENAI_API_KEY。
+                    </div>
+                  )}
+                  <div className="text-xs text-gray-500 space-y-2">
+                    <div>服务器需安装 LaTeX（pdflatex/xelatex/bibtex），否则仅能完成翻译文本但无法编译 PDF。</div>
+                    <details className="rounded-lg border border-gray-200 bg-gray-50 p-2">
+                      <summary className="cursor-pointer text-gray-700">Ubuntu 安装/验证命令</summary>
+                      <pre className="mt-2 whitespace-pre-wrap break-all text-[11px] text-gray-700">
+{`sudo apt update
+sudo apt install -y texlive-full latexdiff
+
+pdflatex --version
+xelatex --version
+bibtex --version
+latexdiff --version`}
+                      </pre>
+                    </details>
+                  </div>
+                </div>
+              )}
+              <div className="flex items-center gap-2">
                 <Button
                   variant="primary"
                   onClick={handleRun}
-                  disabled={loading || (selectedTool.id === 'bib-lookup' && !bibTitle.trim())}
+                  disabled={
+                    loading ||
+                    (selectedTool.id === 'bib-lookup' && !bibTitle.trim()) ||
+                    (selectedTool.id === 'arxiv-latex-translate' && !arxivInput.trim())
+                  }
                 >
                   运行工具
                 </Button>
+                {selectedTool.id === 'arxiv-latex-translate' && arxivJob && ['queued', 'running'].includes(arxivJob.status) && (
+                  <Button
+                    variant="secondary"
+                    onClick={handleCancelArxivJob}
+                    disabled={loading}
+                  >
+                    取消任务
+                  </Button>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -186,6 +662,12 @@ export const CustomToolsPage = () => {
               致谢：该工具的数据与规范化流程参考 rebiber 项目。
               源码链接：
               <span className="ml-1 font-mono">https://github.com/yuchenlin/rebiber</span>
+            </div>
+          )}
+          {selectedTool.id === 'arxiv-latex-translate' && (
+            <div className="text-xs text-gray-500">
+              参考：gpt_academic 的 ArXiv 论文精细翻译思路（下载源码、分片翻译、LaTeX 编译），
+              本项目已按当前后端架构重新实现。
             </div>
           )}
 
@@ -228,8 +710,198 @@ export const CustomToolsPage = () => {
                   ))}
                 </div>
               )}
+              {!loading && selectedTool.id === 'arxiv-latex-translate' && !arxivJob && (
+                <p className="text-gray-500">{arxivHistory.length > 0 ? '暂无当前任务，下面可查看历史任务。' : '暂无结果'}</p>
+              )}
+              {!loading && selectedTool.id === 'arxiv-latex-translate' && arxivJob && (
+                <div className="space-y-3">
+                  <div className="border rounded-lg p-3 bg-gray-50">
+                    <div className="font-semibold text-gray-900 mb-1">任务状态</div>
+                    <div className="text-gray-700">
+                      {arxivJob.status}
+                      {arxivJob.paper_id ? ` · arXiv:${arxivJob.paper_id}` : ''}
+                    </div>
+                    {arxivJob.error && (
+                      <div className="mt-2 text-red-600 whitespace-pre-wrap">{arxivJob.error}</div>
+                    )}
+                    <div className="mt-3">
+                      <div className="flex items-center justify-between text-xs text-gray-500">
+                        <span>分片进度：{translatedChunks}/{totalChunks}</span>
+                        <span>{progressPercent}%</span>
+                      </div>
+                      <div className="mt-1.5 h-2 w-full rounded-full bg-gray-200 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-emerald-500 transition-all duration-300 ease-out"
+                          style={{ width: `${progressPercent}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {arxivJob.steps.length > 0 && (
+                    <div className="border rounded-lg p-3 bg-white">
+                      <div className="font-semibold text-gray-900 mb-2">执行步骤</div>
+                      <div className="space-y-2 text-xs max-h-72 overflow-y-auto pr-1">
+                        {arxivJob.steps.map((step) => (
+                          <div key={step.step_id} className="rounded-lg border border-gray-200 p-2.5 bg-gray-50">
+                            <div className="flex items-start gap-2.5">
+                              <span
+                                className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
+                                  getStepStatusUi(step.status).ring
+                                }`}
+                              >
+                                {getStepStatusUi(step.status).icon}
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <div className={`break-words ${getStepStatusUi(step.status).text}`}>
+                                  {step.message}
+                                </div>
+                                <div className="mt-1 text-[11px] text-gray-400">
+                                  {new Date(step.at).toLocaleTimeString('zh-CN', { hour12: false })}
+                                  {step.elapsed_ms ? ` · ${(step.elapsed_ms / 1000).toFixed(1)}s` : ''}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {arxivJob.artifacts.length > 0 && (
+                    <div className="border rounded-lg p-3">
+                      <div className="font-semibold text-gray-900 mb-2">下载结果</div>
+                      <div className="space-y-2">
+                        {arxivJob.artifacts.map((art) => (
+                          <a
+                            key={art.url}
+                            href={getArtifactUrl(art.url)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block text-blue-600 hover:underline break-all"
+                          >
+                            {art.name} ({(art.size_bytes / 1024).toFixed(1)} KB)
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
+          {!loading && selectedTool.id === 'arxiv-latex-translate' && arxivHistory.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>任务列表</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {arxivHistory.map((item) => {
+                  const expanded = expandedHistoryJobId === item.job_id
+                  const canCompare = Boolean(
+                    (item.translated_pdf_url || getArtifactByName(item, 'translate_zh.pdf')?.url) &&
+                      (item.original_pdf_url || item.paper_id)
+                  )
+                  return (
+                    <div key={item.job_id} className="rounded-lg border border-gray-200 overflow-hidden">
+                      <button
+                        type="button"
+                        className="w-full px-3 py-2 text-left bg-gray-50 hover:bg-gray-100 transition"
+                        onClick={() => setExpandedHistoryJobId(expanded ? null : item.job_id)}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="font-medium text-gray-900 break-words">
+                              {item.task_name || `arXiv:${item.paper_id || item.canonical_id || item.job_id}`}
+                            </div>
+                            <div className="text-[11px] text-gray-500 mt-0.5">
+                              {item.status} · {new Date(item.updated_at).toLocaleString('zh-CN', { hour12: false })}
+                            </div>
+                          </div>
+                          <div className="text-gray-400 text-sm shrink-0">{expanded ? '收起' : '展开'}</div>
+                        </div>
+                      </button>
+                      {expanded && (
+                        <div className="px-3 py-2 bg-white border-t border-gray-200">
+                          <div className="mb-2 flex items-center justify-end">
+                            <button
+                              type="button"
+                              className={`text-xs px-2.5 py-1 rounded border ${
+                                canCompare
+                                  ? 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                                  : 'border-gray-200 text-gray-400 cursor-not-allowed'
+                              }`}
+                              disabled={!canCompare}
+                              onClick={() => handleOpenCompare(item)}
+                            >
+                              对照阅读
+                            </button>
+                          </div>
+                          {item.artifacts.length === 0 ? (
+                            <div className="text-xs text-gray-500">暂无可下载产物</div>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {item.artifacts.map((art) => (
+                                <a
+                                  key={`${item.job_id}-${art.url}`}
+                                  href={getArtifactUrl(art.url)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="block text-blue-600 hover:underline break-all"
+                                >
+                                  {art.name} ({(art.size_bytes / 1024).toFixed(1)} KB)
+                                </a>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+      {compareOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex flex-col">
+          <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+            <div className="min-w-0">
+              <div className="font-semibold text-gray-900 truncate">对照阅读</div>
+              <div className="text-xs text-gray-500 truncate">{compareTitle}</div>
+            </div>
+            <button
+              type="button"
+              className="px-3 py-1.5 rounded border border-gray-300 text-sm text-gray-700 hover:bg-gray-50"
+              onClick={() => setCompareOpen(false)}
+            >
+              关闭
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-0 lg:gap-2 p-2">
+            <div className="bg-white rounded-lg border border-gray-200 overflow-hidden flex flex-col min-h-0">
+              <div className="px-3 py-2 text-xs font-medium text-gray-700 border-b border-gray-200">原文 PDF</div>
+              <div
+                ref={leftPdfRef}
+                onScroll={() => syncPaneScroll(leftPdfRef.current, rightPdfRef.current)}
+                className="flex-1 min-h-0 overflow-auto bg-gray-100"
+              />
+              {compareLeftLoading && <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-200">原文加载中...</div>}
+            </div>
+            <div className="bg-white rounded-lg border border-gray-200 overflow-hidden flex flex-col min-h-0">
+              <div className="px-3 py-2 text-xs font-medium text-gray-700 border-b border-gray-200">译文 PDF</div>
+              <div
+                ref={rightPdfRef}
+                onScroll={() => syncPaneScroll(rightPdfRef.current, leftPdfRef.current)}
+                className="flex-1 min-h-0 overflow-auto bg-gray-100"
+              />
+              {compareRightLoading && <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-200">译文加载中...</div>}
+            </div>
+          </div>
+          {compareError && (
+            <div className="px-4 py-2 bg-white border-t border-gray-200 text-xs text-red-600">{compareError}</div>
+          )}
         </div>
       )}
     </div>

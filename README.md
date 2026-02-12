@@ -80,6 +80,24 @@ cp .env.example .env
 - `pydantic` - 数据验证
 - `cryptography` - 加密库
 
+### 3.1️⃣ （可选）ArXiv 论文精细翻译的 LaTeX 依赖
+
+如果你要使用“Arxiv论文精细翻译”（翻译后编译 PDF），后端机器还需要安装 LaTeX 工具链：
+
+```bash
+sudo apt update
+sudo apt install -y texlive-full latexdiff
+```
+
+安装后建议执行版本检查：
+
+```bash
+pdflatex --version
+xelatex --version
+bibtex --version
+latexdiff --version
+```
+
 ### 4️⃣ 初始化数据库
 
 ```bash

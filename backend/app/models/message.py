@@ -1,4 +1,9 @@
-"""消息模型"""
+"""消息模型
+
+Review note:
+- 使用 `extra` (TEXT JSON) 保存消息级扩展信息（如检索轨迹）。
+- 避免为每个新特性持续加独立列。
+"""
 from sqlalchemy import Column, String, Text, DateTime, ForeignKey, CheckConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -18,6 +23,7 @@ class Message(Base):
     retry_versions = Column(Text, nullable=True, default=None)  # JSON array of previous assistant responses (for retry functionality)
     cost_meta = Column(Text, nullable=True, default=None)  # JSON string for cost metadata
     thinking = Column(Text, nullable=True, default=None)  # Model thinking/reasoning content
+    extra = Column(Text, nullable=True, default=None)  # JSON string for extensible message metadata
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     
     # 关系

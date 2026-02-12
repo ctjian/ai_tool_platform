@@ -1,6 +1,6 @@
 """应用配置"""
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, model_validator
 from typing import List
 from pathlib import Path
 
@@ -47,6 +47,62 @@ class Settings(BaseSettings):
     # 日志配置
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "./logs/app.log"
+
+    # 论文解析（arXiv + GROBID）
+    GROBID_URL: str = "https://lfoppiano-grobid.hf.space"
+    PAPER_DATA_DIR: str = str(Path(__file__).resolve().parents[1] / "data" / "papers")
+    ARXIV_MAX_ACTIVE_PAPERS: int = 3
+    ARXIV_CONTEXT_TOP_K: int = 8
+    ARXIV_CONTEXT_MAX_TOKENS: int = 4000
+    ARXIV_LOW_SCORE_FULLTEXT_THRESHOLD: float = 0.55
+    ARXIV_DOWNLOAD_TIMEOUT_SEC: int = 30
+    GROBID_TIMEOUT_SEC: int = 120
+    ARXIV_CHUNK_TARGET_TOKENS: int = 900
+    ARXIV_CHUNK_MAX_TOKENS: int = 1200
+    ARXIV_CHUNK_OVERLAP_TOKENS: int = 120
+    ARXIV_CHUNK_MIN_TOKENS: int = 120
+
+    # Embedding 检索（SiliconFlow）
+    EMBEDDING_BASE_URL: str = "https://api.siliconflow.cn/v1"
+    EMBEDDING_API_KEY: str = ""
+    EMBEDDING_MODEL: str = "Pro/BAAI/bge-m3"
+    EMBEDDING_TIMEOUT_SEC: int = 60
+    EMBEDDING_BATCH_SIZE: int = 16
+
+    # 自定义工具：arXiv LaTeX 精细翻译
+    CUSTOM_TOOLS_DATA_DIR: str = str(Path(__file__).resolve().parents[1] / "data" / "custom_tools")
+    ARXIV_TRANSLATE_DATA_DIR: str = str(
+        Path(__file__).resolve().parents[1] / "data" / "custom_tools" / "arxiv_translate"
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def treat_empty_env_as_unset(cls, data):
+        """
+        将空字符串环境变量按“未配置”处理。
+        这样 .env 中留空不会覆盖默认值，也避免复杂类型解析报错。
+        """
+        if not isinstance(data, dict):
+            return data
+
+        cleaned = dict(data)
+        for field_name, field in cls.model_fields.items():
+            default = field.default
+
+            # 仅当字段本身有可用默认值时，空字符串才回退到默认值
+            if default in (None, ""):
+                continue
+
+            keys = {field_name}
+            alias = field.validation_alias
+            if isinstance(alias, str):
+                keys.add(alias)
+
+            for key in keys:
+                if cleaned.get(key) == "":
+                    cleaned.pop(key, None)
+
+        return cleaned
     
     @property
     def cors_origins_list(self) -> List[str]:

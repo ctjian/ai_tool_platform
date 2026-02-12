@@ -1,8 +1,12 @@
-"""会话管理API"""
+"""会话管理API
+
+Review note:
+- 会话/消息的扩展状态通过 `extra` JSON 管理。
+- 增加 paper 资源 API：查询、激活、取消激活。
+"""
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
-import os
 from typing import List, Optional, Dict, Any
 import json
 
@@ -20,9 +24,16 @@ from app.schemas.conversation import (
 )
 from app.utils.openai_helper import generate_title_for_conversation
 from app.models.message import Message
+from app.config import settings
+from app.services.session.paper_state import (
+    list_papers_from_extra,
+    activate_papers_in_conversation,
+    deactivate_paper_in_conversation,
+    parse_conversation_extra,
+    serialize_conversation_extra,
+)
 
 router = APIRouter()
-DEBUG_THINKING = os.getenv("DEBUG_THINKING") == "1"
 
 
 async def upsert_system_prompt(
@@ -88,6 +99,7 @@ async def get_conversations(
             "id": conv.id,
             "tool_id": conv.tool_id,
             "title": conv.title,
+            "extra": conv.extra,
             "created_at": conv.created_at,
             "updated_at": conv.updated_at,
             "message_count": message_count,
@@ -107,14 +119,6 @@ async def get_conversation(
     if not conversation:
         raise HTTPException(status_code=404, detail="会话不存在")
 
-    if DEBUG_THINKING:
-        thinking_msgs = [m for m in conversation.messages if getattr(m, "thinking", None)]
-        sample_len = len(thinking_msgs[0].thinking) if thinking_msgs else 0
-        print(
-            f"[thinking] conv={conversation_id} total={len(conversation.messages)} "
-            f"thinking_msgs={len(thinking_msgs)} sample_len={sample_len}"
-        )
-    
     # 构建响应
     messages = []
     for msg in conversation.messages:
@@ -143,6 +147,7 @@ async def get_conversation(
                 retry_versions=retry_versions,
                 cost_meta=msg.cost_meta,
                 thinking=msg.thinking,
+                extra=msg.extra,
                 created_at=msg.created_at
             )
         )
@@ -153,6 +158,7 @@ async def get_conversation(
         id=conversation.id,
         tool_id=conversation.tool_id,
         title=conversation.title,
+        extra=conversation.extra,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
         message_count=message_count,
@@ -180,6 +186,7 @@ async def create_conversation(
         id=conversation.id,
         tool_id=conversation.tool_id,
         title=conversation.title,
+        extra=conversation.extra,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
         message_count=0,
@@ -215,10 +222,73 @@ async def update_conversation(
         id=conversation.id,
         tool_id=conversation.tool_id,
         title=conversation.title,
+        extra=conversation.extra,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
         message_count=message_count,
     )
+
+
+@router.get("/conversations/{conversation_id}/papers")
+async def get_conversation_papers(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_chat_session),
+):
+    """获取会话论文资源（registry + active_ids）。"""
+    conversation = await conversation_crud.get(db, conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    extra_dict = parse_conversation_extra(conversation.extra)
+    return list_papers_from_extra(extra_dict)
+
+
+@router.post("/conversations/{conversation_id}/papers/activate")
+async def activate_conversation_papers(
+    conversation_id: str,
+    payload: Dict[str, Any] = Body(...),
+    db: AsyncSession = Depends(get_chat_session),
+):
+    """激活一篇或多篇论文（不删除 registry）。"""
+    conversation = await conversation_crud.get(db, conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    canonical_ids = payload.get("canonical_ids")
+    canonical_id = payload.get("canonical_id")
+    if not isinstance(canonical_ids, list):
+        canonical_ids = [canonical_id] if canonical_id else []
+    canonical_ids = [str(x).strip() for x in canonical_ids if str(x).strip()]
+    if not canonical_ids:
+        raise HTTPException(status_code=400, detail="缺少 canonical_id(s)")
+
+    extra_dict = parse_conversation_extra(conversation.extra)
+    updated = activate_papers_in_conversation(
+        extra=extra_dict,
+        canonical_ids=canonical_ids,
+        max_active=settings.ARXIV_MAX_ACTIVE_PAPERS,
+    )
+    await conversation_crud.set_extra(db, conversation_id, serialize_conversation_extra(updated))
+    return list_papers_from_extra(updated)
+
+
+@router.post("/conversations/{conversation_id}/papers/deactivate")
+async def deactivate_conversation_paper(
+    conversation_id: str,
+    payload: Dict[str, Any] = Body(...),
+    db: AsyncSession = Depends(get_chat_session),
+):
+    """取消激活论文（保留 registry，可重新激活）。"""
+    conversation = await conversation_crud.get(db, conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    canonical_id = str(payload.get("canonical_id") or "").strip()
+    if not canonical_id:
+        raise HTTPException(status_code=400, detail="缺少 canonical_id")
+
+    extra_dict = parse_conversation_extra(conversation.extra)
+    updated = deactivate_paper_in_conversation(extra_dict, canonical_id)
+    await conversation_crud.set_extra(db, conversation_id, serialize_conversation_extra(updated))
+    return list_papers_from_extra(updated)
 
 
 @router.delete("/conversations/{conversation_id}")

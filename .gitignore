@@ -34,7 +34,6 @@ logs/
 *.db
 data/
 # next 2 lines are exceptions to keep pricing.json in version control
-!backend/data/
 !backend/data/pricing.json
 
 # OS / Editor
@@ -44,3 +43,5 @@ data/
 
 # custom temporary files
 /tmp/
+
+*.pdf

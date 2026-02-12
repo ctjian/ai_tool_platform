@@ -1,4 +1,6 @@
 // API 类型定义
+// Review note:
+// - 新增 ConversationPapersState/ConversationPaperItem，前端用于管理会话论文 registry + active 状态。
 export interface Category {
   id: string
   name: string
@@ -30,6 +32,7 @@ export interface Message {
   retry_versions?: string | string[] // 重试版本列表（之前的回复）- JSON字符串或数组
   cost_meta?: any
   thinking?: string
+  extra?: any
   thinking_collapsed?: boolean
   thinking_done?: boolean
   created_at: string
@@ -39,9 +42,86 @@ export interface Conversation {
   id: string
   tool_id: string | null
   title: string
+  extra?: any
   messages: Message[]
   created_at: string
   updated_at: string
+}
+
+export interface ConversationPaperItem {
+  canonical_id: string
+  paper_id: string
+  filename: string
+  pdf_url: string
+  title?: string
+  safe_id?: string
+  last_seen_at?: string
+  is_active: boolean
+}
+
+export interface ConversationPapersState {
+  active_ids: string[]
+  papers: ConversationPaperItem[]
+}
+
+export interface ArxivTranslateCreateRequest {
+  input_text: string
+  api_key?: string
+  base_url?: string
+  model?: string
+  target_language?: string
+  extra_prompt?: string
+  allow_cache?: boolean
+  concurrency?: number
+}
+
+export interface ArxivTranslateStep {
+  step_id: string
+  key: string
+  status: 'running' | 'done' | 'error' | string
+  message: string
+  at: string
+  elapsed_ms?: number
+}
+
+export interface ArxivTranslateArtifact {
+  name: string
+  path: string
+  url: string
+  size_bytes: number
+}
+
+export interface ArxivTranslateJob {
+  job_id: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | string
+  input_text: string
+  paper_id?: string
+  canonical_id?: string
+  created_at: string
+  updated_at: string
+  error?: string
+  steps: ArxivTranslateStep[]
+  artifacts: ArxivTranslateArtifact[]
+  meta: Record<string, any>
+}
+
+export interface ArxivTranslateHistoryItem {
+  job_id: string
+  status: string
+  input_text?: string
+  paper_id?: string
+  canonical_id?: string
+  created_at: string
+  updated_at: string
+  task_name: string
+  paper_title?: string
+  original_pdf_url?: string
+  translated_pdf_url?: string
+  artifacts: ArxivTranslateArtifact[]
+}
+
+export interface ArxivTranslateHistoryResponse {
+  items: ArxivTranslateHistoryItem[]
 }
 
 export interface ChatRequest {
