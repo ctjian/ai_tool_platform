@@ -1,4 +1,9 @@
-"""会话和消息的CRUD操作"""
+"""会话和消息的CRUD操作
+
+Review note:
+- Conversation/Message 的 `extra` 字段用于保存可扩展 JSON 状态。
+- 本文件提供对 `extra` 的基础读写接口，供上层会话状态逻辑复用。
+"""
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func
 from sqlalchemy.orm import selectinload
@@ -90,6 +95,21 @@ class CRUDConversation:
         await db.commit()
         await db.refresh(db_obj)
         return db_obj
+
+    async def set_extra(
+        self,
+        db: AsyncSession,
+        conversation_id: str,
+        extra: Optional[str],
+    ) -> Optional[Conversation]:
+        """更新会话 extra JSON 字符串。"""
+        db_obj = await self.get(db, conversation_id)
+        if not db_obj:
+            return None
+        db_obj.extra = extra
+        await db.commit()
+        await db.refresh(db_obj)
+        return db_obj
     
     async def delete(self, db: AsyncSession, conversation_id: str) -> bool:
         """删除会话"""
@@ -148,6 +168,7 @@ class CRUDMessage:
         images: Optional[str] = None,
         cost_meta: Optional[str] = None,
         thinking: Optional[str] = None,
+        extra: Optional[str] = None,
     ) -> Message:
         """创建消息"""
         message_id = str(uuid.uuid4())
@@ -160,6 +181,7 @@ class CRUDMessage:
             images=images,
             cost_meta=cost_meta,
             thinking=thinking,
+            extra=extra,
         )
         db.add(db_obj)
         
@@ -185,10 +207,25 @@ class CRUDMessage:
             return None
         
         # 更新所有属性
-        for field in ['content', 'retry_versions', 'role', 'images', 'cost_meta', 'thinking']:
+        for field in ['content', 'retry_versions', 'role', 'images', 'cost_meta', 'thinking', 'extra']:
             if hasattr(obj_in, field):
                 setattr(db_obj, field, getattr(obj_in, field))
         
+        await db.commit()
+        await db.refresh(db_obj)
+        return db_obj
+
+    async def set_extra(
+        self,
+        db: AsyncSession,
+        message_id: str,
+        extra: Optional[str],
+    ) -> Optional[Message]:
+        """更新消息 extra JSON 字符串。"""
+        db_obj = await self.get(db, message_id)
+        if not db_obj:
+            return None
+        db_obj.extra = extra
         await db.commit()
         await db.refresh(db_obj)
         return db_obj

@@ -79,6 +79,26 @@ code {
   30% { opacity: 1; transform: translateX(3px); }
 }
 
+/* 论文卡片聚焦高亮动画 */
+@keyframes paper-focus-pulse {
+  0% {
+    background-color: #ecfdf5;
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.32);
+  }
+  70% {
+    background-color: #f7fefb;
+    box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+  }
+  100% {
+    background-color: #ffffff;
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+.paper-focus-animate {
+  animation: paper-focus-pulse 0.6s ease-out 3;
+}
+
 /* 消息样式 */
 .message-user {
   @apply bg-blue-100 text-gray-900;

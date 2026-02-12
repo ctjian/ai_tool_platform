@@ -1,4 +1,9 @@
-"""数据库连接和会话管理"""
+"""数据库连接和会话管理
+
+Review note:
+- 对话库使用 conversations.extra / messages.extra 作为可扩展 JSON 容器。
+- 启动时保留轻量兼容逻辑：旧库缺列时自动补齐。
+"""
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 from typing import AsyncGenerator
@@ -86,11 +91,18 @@ async def init_db() -> None:
             Conversation.__table__,
             Message.__table__,
         ])
-        # 兼容旧库：补充 messages.cost_meta / messages.thinking 列
+        # 兼容旧库：补充 conversations/messages 扩展列与历史列
+        result = await conn.exec_driver_sql("PRAGMA table_info(conversations)")
+        conversation_columns = [row[1] for row in result.fetchall()]
+        if "extra" not in conversation_columns:
+            await conn.exec_driver_sql("ALTER TABLE conversations ADD COLUMN extra TEXT")
+
         result = await conn.exec_driver_sql("PRAGMA table_info(messages)")
-        columns = [row[1] for row in result.fetchall()]
-        if "cost_meta" not in columns:
+        message_columns = [row[1] for row in result.fetchall()]
+        if "cost_meta" not in message_columns:
             await conn.exec_driver_sql("ALTER TABLE messages ADD COLUMN cost_meta TEXT")
-        if "thinking" not in columns:
+        if "thinking" not in message_columns:
             await conn.exec_driver_sql("ALTER TABLE messages ADD COLUMN thinking TEXT")
+        if "extra" not in message_columns:
+            await conn.exec_driver_sql("ALTER TABLE messages ADD COLUMN extra TEXT")
         print("✅ 对话历史数据库表创建成功")

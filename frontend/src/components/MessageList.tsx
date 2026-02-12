@@ -1,3 +1,6 @@
+// Review note:
+// - 当消息处于 __waiting__ 阶段时，读取 message.extra.status_steps 渲染论文检索进度列表。
+// - 每个步骤显示运行/完成/失败状态，完成时展示耗时（秒）。
 import React, { forwardRef, useMemo, useState } from 'react'
 import { Message } from '../types/api'
 import { useAppStore } from '../store/app'
@@ -7,7 +10,7 @@ import a11yOneLight from 'react-syntax-highlighter/dist/esm/styles/prism/a11y-on
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
-import { Copy, Check, RotateCcw, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Copy, Check, RotateCcw, ChevronLeft, ChevronRight, Loader2, AlertCircle } from 'lucide-react'
 import { addToast } from './ui'
 import 'katex/dist/katex.min.css'
 
@@ -237,6 +240,13 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
               const rawContent = getMessageContent(msg)
               const { text: displayContent, cost } = extractCostMeta(rawContent, msg.cost_meta)
               const isWaiting = msg.role === 'assistant' && displayContent === '__waiting__'
+              const statusSteps = Array.isArray((msg as any).extra?.status_steps)
+                ? [...((msg as any).extra.status_steps as any[])].sort((a, b) => {
+                    const ao = Number(a?.order ?? 0)
+                    const bo = Number(b?.order ?? 0)
+                    return ao - bo
+                  })
+                : []
               const hasThinking = msg.role === 'assistant' && (msg.thinking && msg.thinking.trim().length > 0)
               const showThinking = msg.role === 'assistant' && (hasThinking || isWaiting)
               const thinkingCollapsed = msg.thinking_collapsed ?? true
@@ -318,6 +328,54 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
                           >
                             {convertLatexDelimiters(displayContent)}
                           </ReactMarkdown>
+                        )}
+                        {isWaiting && (
+                          <div className="mt-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 shadow-sm">
+                            <div className="flex items-center gap-2 text-gray-800 font-medium">
+                              <Loader2 size={15} className="animate-spin" />
+                              <span>论文检索处理中</span>
+                            </div>
+                            {statusSteps.length > 0 && (
+                              <div className="mt-3 space-y-1.5">
+                                {statusSteps.map((step: any, idx: number) => {
+                                  const status = String(step?.status || 'running')
+                                  const isDone = status === 'done'
+                                  const isError = status === 'error'
+                                  const elapsedMs = Number(step?.elapsed_ms)
+                                  const elapsedLabel = Number.isFinite(elapsedMs) && isDone
+                                    ? `${Math.max(0, elapsedMs / 1000).toFixed(1)}s`
+                                    : ''
+                                  return (
+                                    <div
+                                      key={step?.step_id || `${idx}`}
+                                      className="flex items-start justify-between gap-3 rounded-lg px-2 py-1.5 hover:bg-gray-50"
+                                    >
+                                      <div className="flex items-start gap-2 min-w-0">
+                                        <span className="mt-0.5">
+                                          {isDone ? (
+                                            <Check size={14} className="text-green-600" />
+                                          ) : isError ? (
+                                            <AlertCircle size={14} className="text-red-500" />
+                                          ) : (
+                                            <Loader2 size={14} className="animate-spin text-gray-500" />
+                                          )}
+                                        </span>
+                                        <span className={`text-xs leading-5 ${isError ? 'text-red-600' : 'text-gray-700'}`}>
+                                          {String(step?.message || '')}
+                                          {isDone ? ' √' : ''}
+                                        </span>
+                                      </div>
+                                      {elapsedLabel && (
+                                        <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500">
+                                          {elapsedLabel}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </div>
                         )}
                       </div>
                       {cost && (

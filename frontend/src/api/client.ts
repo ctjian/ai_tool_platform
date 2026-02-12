@@ -1,5 +1,17 @@
 import axios from 'axios'
-import { Category, Tool, Conversation, ChatRequest } from '../types/api'
+import {
+  Category,
+  Tool,
+  Conversation,
+  ChatRequest,
+  ConversationPapersState,
+  ArxivTranslateCreateRequest,
+  ArxivTranslateJob,
+  ArxivTranslateHistoryResponse,
+} from '../types/api'
+
+// Review note:
+// - 增加 conversation papers API，支撑右侧资源面板与手动激活/取消激活。
 
 const API_BASE = '/api/v1'
 
@@ -43,6 +55,18 @@ export const apiClient = {
     api.post<{ success: boolean; title: string; conversation_id: string }>(
       `/conversations/${conversationId}/generate-title`,
       apiConfig ? { api_config: apiConfig } : {}
+    ),
+  getConversationPapers: (conversationId: string) =>
+    api.get<ConversationPapersState>(`/conversations/${conversationId}/papers`),
+  activateConversationPapers: (conversationId: string, canonicalIds: string[]) =>
+    api.post<ConversationPapersState>(
+      `/conversations/${conversationId}/papers/activate`,
+      { canonical_ids: canonicalIds }
+    ),
+  deactivateConversationPaper: (conversationId: string, canonicalId: string) =>
+    api.post<ConversationPapersState>(
+      `/conversations/${conversationId}/papers/deactivate`,
+      { canonical_id: canonicalId }
     ),
   
   // 聊天相关 - 使用fetch处理SSE流式响应
@@ -126,6 +150,14 @@ export const apiClient = {
       base_url: string
       models: string[]
       model_groups: { name: string; models: string[] }[]
+      custom_tool_defaults?: {
+        arxiv_translate?: {
+          target_language?: string
+          concurrency?: number
+          model?: string
+          extra_prompt?: string
+        }
+      }
     }>('/config/default'),
   getConfig: () => api.get<Record<string, any>>('/config'),
   updateConfig: (config: Record<string, any>) =>
@@ -144,6 +176,15 @@ export const apiClient = {
     max_candidates: number
   }) =>
     api.post('/custom-tools/bib-lookup', payload),
+
+  createArxivTranslateJob: (payload: ArxivTranslateCreateRequest) =>
+    api.post<ArxivTranslateJob>('/custom-tools/arxiv-translate/jobs', payload),
+  listArxivTranslateJobs: (limit = 30, statuses?: string) =>
+    api.get<ArxivTranslateHistoryResponse>('/custom-tools/arxiv-translate/jobs', { params: { limit, statuses } }),
+  getArxivTranslateJob: (jobId: string) =>
+    api.get<ArxivTranslateJob>(`/custom-tools/arxiv-translate/jobs/${jobId}`),
+  cancelArxivTranslateJob: (jobId: string) =>
+    api.post<ArxivTranslateJob>(`/custom-tools/arxiv-translate/jobs/${jobId}/cancel`),
 }
 
 export default apiClient

@@ -1,4 +1,8 @@
-"""FastAPI应用主文件"""
+"""FastAPI应用主文件.
+
+Review note:
+- 挂载 /papers 静态目录，前端可直接访问解析后的论文 PDF 资源。
+"""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +23,8 @@ async def lifespan(app: FastAPI):
     os.makedirs("data", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
     os.makedirs("uploads/icons", exist_ok=True)
+    os.makedirs(settings.PAPER_DATA_DIR, exist_ok=True)
+    os.makedirs(settings.CUSTOM_TOOLS_DATA_DIR, exist_ok=True)
     
     # 初始化数据库
     await init_db()
@@ -53,6 +59,10 @@ app.add_middleware(
 # 挂载静态文件目录
 if os.path.exists("uploads"):
     app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+if os.path.exists(settings.PAPER_DATA_DIR):
+    app.mount("/papers", StaticFiles(directory=settings.PAPER_DATA_DIR), name="papers")
+if os.path.exists(settings.CUSTOM_TOOLS_DATA_DIR):
+    app.mount("/custom-tools-files", StaticFiles(directory=settings.CUSTOM_TOOLS_DATA_DIR), name="custom-tools-files")
 
 
 @app.get("/")

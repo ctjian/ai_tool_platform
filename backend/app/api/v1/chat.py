@@ -1,4 +1,9 @@
-"""聊天API（流式输出）"""
+"""聊天API（流式输出）.
+
+Review note:
+- 多轮论文上下文状态放在 conversations.extra（registry + active_ids）。
+- assistant 的检索轨迹放在 messages.extra，便于回放与排障。
+"""
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,8 +21,15 @@ from app.utils.chat2api_helper import stream_chat2api_completion
 from app.utils.pricing import compute_text_cost
 from app.utils.system_prompt import get_default_system_prompt, pick_system_prompt
 from app.config import settings
-from app.services.pipeline.paper_pipeline import ArxivPipelineError, build_arxiv_context_for_message
-from app.services.sources.arxiv.id_parser import MultipleArxivReferencesError
+from app.services.pipeline.paper_pipeline import ArxivPipelineError, build_arxiv_context_for_targets
+from app.services.sources.arxiv.id_parser import extract_arxiv_targets, build_target_from_ids
+from app.services.session.paper_state import (
+    activate_papers_in_conversation,
+    get_active_registry_entries,
+    parse_conversation_extra,
+    serialize_conversation_extra,
+    upsert_registry_entries,
+)
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error")
@@ -62,7 +74,16 @@ async def generate_chat_stream(
     context_rounds: Optional[int] = None,
 ) -> AsyncGenerator[str, None]:
     """生成聊天流式响应"""
-    
+
+    # 保证 finally 中引用的状态总是已定义，避免早退分支触发 UnboundLocalError。
+    full_response = ""
+    thinking_response = ""
+    usage_data: Optional[Dict] = None
+    stopped_by_user = False
+    cancelled = False
+    assistant_saved = False
+    assistant_msg = None
+
     try:
         # 1. 获取system prompt
         # 如果指定了tool_id，使用 tools_db 获取工具的system prompt
@@ -147,21 +168,78 @@ async def generate_chat_stream(
                     })
 
         user_message_for_model = user_message
+        assistant_extra_payload: Dict = {}
         if not retry_message_id:
-            try:
-                arxiv_context = await asyncio.to_thread(
-                    build_arxiv_context_for_message,
-                    user_message,
-                    settings,
+            conversation_obj = await conversation_crud.get(chat_db, conversation_id)
+            conversation_extra = parse_conversation_extra(conversation_obj.extra if conversation_obj else None)
+            extra_changed = False
+
+            detected_targets = extract_arxiv_targets(user_message)
+            if detected_targets:
+                discovered_entries = [
+                    {
+                        "paper_id": t.paper_id,
+                        "canonical_id": t.canonical_id,
+                        "safe_id": t.safe_id,
+                        "filename": f"{t.safe_id}.pdf",
+                        "pdf_url": f"/papers/{t.safe_id}/{t.safe_id}.pdf",
+                    }
+                    for t in detected_targets
+                ]
+                conversation_extra = upsert_registry_entries(conversation_extra, discovered_entries)
+                conversation_extra = activate_papers_in_conversation(
+                    conversation_extra,
+                    [t.canonical_id for t in detected_targets],
+                    max_active=settings.ARXIV_MAX_ACTIVE_PAPERS,
                 )
-            except MultipleArxivReferencesError as exc:
-                error_data = json.dumps({"error": str(exc)})
-                yield f"event: error\ndata: {error_data}\n\n"
-                return
-            except ArxivPipelineError as exc:
-                error_data = json.dumps({"error": str(exc)})
-                yield f"event: error\ndata: {error_data}\n\n"
-                return
+                extra_changed = True
+
+            active_entries = get_active_registry_entries(conversation_extra)
+            active_targets = []
+            for item in active_entries:
+                target = build_target_from_ids(
+                    paper_id=str(item.get("paper_id") or ""),
+                    canonical_id=str(item.get("canonical_id") or ""),
+                )
+                if target:
+                    active_targets.append(target)
+
+            arxiv_context = None
+            if active_targets:
+                progress_queue: asyncio.Queue[Dict] = asyncio.Queue()
+                loop = asyncio.get_running_loop()
+
+                def progress_reporter(payload: Dict) -> None:
+                    loop.call_soon_threadsafe(progress_queue.put_nowait, payload)
+
+                worker_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        build_arxiv_context_for_targets,
+                        user_message,
+                        active_targets,
+                        settings,
+                        progress_reporter,
+                    )
+                )
+                try:
+                    while not worker_task.done():
+                        try:
+                            progress_payload = await asyncio.wait_for(progress_queue.get(), timeout=0.12)
+                            status_data = json.dumps(progress_payload, ensure_ascii=False)
+                            yield f"event: status\ndata: {status_data}\n\n"
+                        except asyncio.TimeoutError:
+                            continue
+
+                    while not progress_queue.empty():
+                        progress_payload = progress_queue.get_nowait()
+                        status_data = json.dumps(progress_payload, ensure_ascii=False)
+                        yield f"event: status\ndata: {status_data}\n\n"
+
+                    arxiv_context = await worker_task
+                except ArxivPipelineError as exc:
+                    error_data = json.dumps({"error": str(exc)})
+                    yield f"event: error\ndata: {error_data}\n\n"
+                    return
 
             if arxiv_context:
                 openai_messages.append(
@@ -170,14 +248,25 @@ async def generate_chat_stream(
                         "content": arxiv_context.context_prompt,
                     }
                 )
-                user_message_for_model = arxiv_context.query_text or user_message
+                # 检索 query 会去掉 arXiv 链接；但送给模型的用户消息保持原始输入。
+                user_message_for_model = user_message
+                assistant_extra_payload["retrieval"] = arxiv_context.retrieval_meta
+                conversation_extra = upsert_registry_entries(conversation_extra, arxiv_context.papers)
+                extra_changed = True
                 logger.info(
-                    "chat-arxiv-injected paper_id=%s query=%s",
-                    arxiv_context.target.paper_id,
+                    "chat-arxiv-injected papers=%s query=%s",
+                    ",".join(p.get("paper_id", "") for p in arxiv_context.papers),
                     (user_message_for_model or "")[:180],
                 )
-            elif "arxiv.org" in (user_message or "").lower():
-                logger.info("chat-arxiv-skipped reason=not-in-head-or-tail-window")
+            elif "arxiv.org" in (user_message or "").lower() and not detected_targets:
+                logger.info("chat-arxiv-skipped reason=invalid-or-unsupported-id")
+
+            if extra_changed and conversation_obj:
+                await conversation_crud.set_extra(
+                    chat_db,
+                    conversation_id,
+                    serialize_conversation_extra(conversation_extra),
+                )
 
         # 添加当前用户消息（支持图片）
         # 重试时不重复添加当前用户消息，避免重复输入
@@ -226,13 +315,6 @@ async def generate_chat_stream(
             error_data = json.dumps({"error": "未配置 Chat2API 代理"})
             yield f"event: error\ndata: {error_data}\n\n"
             return
-        full_response = ""
-        thinking_response = ""
-        usage_data: Optional[Dict] = None
-        stopped_by_user = False
-        cancelled = False
-        assistant_saved = False
-        assistant_msg = None
         active_streams[conversation_id] = True
 
         stream_iter = (
@@ -267,6 +349,11 @@ async def generate_chat_stream(
                     )
             cost_meta_json = json.dumps(cost_meta, ensure_ascii=False) if cost_meta else None
             thinking_text = thinking_response if thinking_response else None
+            assistant_extra_json = (
+                json.dumps(assistant_extra_payload, ensure_ascii=False)
+                if assistant_extra_payload
+                else None
+            )
 
             if retry_message_id:
                 update_msg = await message_crud.get(chat_db, retry_message_id)
@@ -282,6 +369,7 @@ async def generate_chat_stream(
                     update_msg.cost_meta = cost_meta_json
                     update_msg.thinking = thinking_text
                     update_msg.retry_versions = json.dumps(retry_versions)
+                    update_msg.extra = assistant_extra_json
                     await message_crud.update(chat_db, retry_message_id, update_msg)
                     assistant_msg = update_msg
             else:
@@ -292,6 +380,7 @@ async def generate_chat_stream(
                     full_response,
                     cost_meta=cost_meta_json,
                     thinking=thinking_text,
+                    extra=assistant_extra_json,
                 )
             assistant_saved = True
             return cost_meta
@@ -333,6 +422,12 @@ async def generate_chat_stream(
                 "finish_reason": "stopped" if stopped_by_user else "stop"
             }
             if assistant_msg:
+                extra_obj = None
+                if assistant_msg.extra:
+                    try:
+                        extra_obj = json.loads(assistant_msg.extra)
+                    except Exception:
+                        extra_obj = None
                 message_obj["message"] = {
                     "id": assistant_msg.id,
                     "conversation_id": assistant_msg.conversation_id,
@@ -341,6 +436,7 @@ async def generate_chat_stream(
                     "retry_versions": assistant_msg.retry_versions,
                     "cost_meta": cost_meta,
                     "thinking": assistant_msg.thinking,
+                    "extra": extra_obj,
                     "created_at": assistant_msg.created_at.isoformat() if assistant_msg.created_at else None,
                 }
             done_data = json.dumps(message_obj)

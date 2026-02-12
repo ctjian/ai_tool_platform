@@ -51,9 +51,10 @@ class Settings(BaseSettings):
     # 论文解析（arXiv + GROBID）
     GROBID_URL: str = "https://lfoppiano-grobid.hf.space"
     PAPER_DATA_DIR: str = str(Path(__file__).resolve().parents[1] / "data" / "papers")
-    ARXIV_WINDOW_CHARS: int = 100  # 仅在首尾窗口提取 arXiv 引用
+    ARXIV_MAX_ACTIVE_PAPERS: int = 3
     ARXIV_CONTEXT_TOP_K: int = 8
-    ARXIV_CONTEXT_MAX_CHARS: int = 12000
+    ARXIV_CONTEXT_MAX_TOKENS: int = 4000
+    ARXIV_LOW_SCORE_FULLTEXT_THRESHOLD: float = 0.55
     ARXIV_DOWNLOAD_TIMEOUT_SEC: int = 30
     GROBID_TIMEOUT_SEC: int = 120
     ARXIV_CHUNK_TARGET_TOKENS: int = 900
@@ -67,6 +68,12 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "Pro/BAAI/bge-m3"
     EMBEDDING_TIMEOUT_SEC: int = 60
     EMBEDDING_BATCH_SIZE: int = 16
+
+    # 自定义工具：arXiv LaTeX 精细翻译
+    CUSTOM_TOOLS_DATA_DIR: str = str(Path(__file__).resolve().parents[1] / "data" / "custom_tools")
+    ARXIV_TRANSLATE_DATA_DIR: str = str(
+        Path(__file__).resolve().parents[1] / "data" / "custom_tools" / "arxiv_translate"
+    )
 
     @model_validator(mode="before")
     @classmethod

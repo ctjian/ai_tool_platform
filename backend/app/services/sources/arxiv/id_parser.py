@@ -1,13 +1,15 @@
-"""Parse arXiv IDs from user input."""
+"""Parse arXiv IDs from user input.
+
+Review note:
+- 支持整条消息扫描并提取多篇 arXiv 引用（URL/裸ID）。
+- 支持会话 active paper 状态回放：可由已存 paper_id/canonical_id 重建目标对象。
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import re
 from typing import List, Optional
-
-
-WINDOW_CHARS_DEFAULT = 100
 
 
 class ArxivParseError(ValueError):
@@ -26,7 +28,7 @@ class ArxivTarget:
     canonical_id: str
     safe_id: str
     source_fragment: str
-    position: str  # "prefix" | "suffix"
+    position: str  # "message"
 
 
 _URL_ID_PATTERN = re.compile(
@@ -102,26 +104,16 @@ def _extract_candidates(text: str, position: str) -> List[ArxivTarget]:
     return candidates
 
 
-def extract_single_arxiv_target(
+def extract_arxiv_targets(
     message: str,
-    window_chars: int = WINDOW_CHARS_DEFAULT,
-) -> Optional[ArxivTarget]:
-    """
-    Parse at most one arXiv reference from the first/last window of input.
-
-    This intentionally only inspects the first `window_chars` and last
-    `window_chars` characters as requested by product requirements.
-    """
+    max_refs: Optional[int] = None,
+) -> List[ArxivTarget]:
+    """Parse zero-to-many arXiv references from the whole input message."""
     text = message or ""
     if not text.strip():
-        return None
+        return []
 
-    window = max(1, int(window_chars))
-    prefix = text[:window]
-    suffix = text[-window:] if len(text) > window else text
-
-    candidates = _extract_candidates(prefix, "prefix")
-    candidates.extend(_extract_candidates(suffix, "suffix"))
+    candidates = _extract_candidates(text, "message")
 
     unique: dict[str, ArxivTarget] = {}
     for item in candidates:
@@ -129,10 +121,42 @@ def extract_single_arxiv_target(
 
     found = list(unique.values())
     if not found:
+        return []
+
+    if max_refs and max_refs > 0:
+        return found[: int(max_refs)]
+    return found
+
+
+def extract_single_arxiv_target(message: str) -> Optional[ArxivTarget]:
+    """Parse at most one arXiv reference from the whole input message."""
+    found = extract_arxiv_targets(message)
+    if not found:
         return None
     if len(found) > 1:
         raise MultipleArxivReferencesError("一次只支持解析一篇 arXiv 论文，请只保留一个链接或ID。")
     return found[0]
+
+
+def build_target_from_ids(
+    paper_id: str,
+    canonical_id: Optional[str] = None,
+    source_fragment: str = "conversation_active",
+    position: str = "conversation_active",
+) -> Optional[ArxivTarget]:
+    """Build target from persisted paper identifiers in conversation extra."""
+    normalized = normalize_arxiv_id(paper_id)
+    if not normalized:
+        return None
+    normalized_paper_id, normalized_canonical_id = normalized
+    canonical = (canonical_id or normalized_canonical_id).strip() or normalized_canonical_id
+    return ArxivTarget(
+        paper_id=normalized_paper_id,
+        canonical_id=canonical,
+        safe_id=safe_id_from_canonical(canonical),
+        source_fragment=source_fragment,
+        position=position,
+    )
 
 
 def remove_detected_arxiv_reference(message: str, target: ArxivTarget) -> str:
@@ -173,4 +197,12 @@ def remove_detected_arxiv_reference(message: str, target: ArxivTarget) -> str:
         flags=re.IGNORECASE,
     )
     out = re.sub(r"\s+", " ", out).strip()
+    return out
+
+
+def remove_detected_arxiv_references(message: str, targets: List[ArxivTarget]) -> str:
+    """Remove all detected arXiv references from a message."""
+    out = message or ""
+    for target in targets or []:
+        out = remove_detected_arxiv_reference(out, target)
     return out
