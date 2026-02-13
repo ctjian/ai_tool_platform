@@ -107,6 +107,17 @@ async def generate_chat_stream(
                     break
                 trimmed.append(msg)
             messages_history = trimmed
+            # 编辑重试：将目标 assistant 前最近一条 user 消息更新为本次请求内容。
+            # 这样可复用重试链路，同时确保 LLM 与数据库都使用新 user 内容。
+            retry_user_msg = None
+            for i in range(len(messages_history) - 1, -1, -1):
+                if messages_history[i].role == "user":
+                    retry_user_msg = messages_history[i]
+                    break
+            if retry_user_msg:
+                retry_user_msg.content = user_message
+                retry_user_msg.images = json.dumps(user_images) if user_images else None
+                await message_crud.update(chat_db, retry_user_msg.id, retry_user_msg)
         # 通用对话：从历史 system 消息取系统提示词
         if not tool_id:
             system_prompt = pick_system_prompt(messages_history)

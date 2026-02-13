@@ -910,6 +910,56 @@ function ChatWindow() {
     })
   }, [messages, chatLoading, versionIndices])
 
+  const handleSubmitUserEdit = useCallback(async (payload: {
+    userMessageId: string
+    assistantMessageId: string
+    content: string
+  }) => {
+    if (chatLoading) return
+    const { userMessageId, assistantMessageId, content } = payload
+    const nextContent = content.trim()
+    if (!nextContent) {
+      addToast('编辑内容不能为空', 'warning')
+      return
+    }
+    const userMsg = messages.find((m) => m.id === userMessageId && m.role === 'user')
+    if (!userMsg) {
+      addToast('未找到对应用户消息', 'error')
+      return
+    }
+
+    // 与重试一致：重置版本、清空目标 assistant，进入等待态
+    setVersionIndices({ ...versionIndices, [assistantMessageId]: 0 })
+    setMessages((msgs) =>
+      msgs.map((m) => {
+        if (m.id === userMessageId) {
+          return { ...m, content: nextContent }
+        }
+        if (m.id === assistantMessageId) {
+          return {
+            ...m,
+            content: '__waiting__',
+            thinking: '',
+            thinking_collapsed: true,
+            thinking_done: false,
+            cost_meta: null,
+            extra: {
+              ...(m as any).extra,
+              status_steps: [],
+            },
+          }
+        }
+        return m
+      })
+    )
+
+    await sendMessageRef.current?.(nextContent, userMsg.images || [], {
+      skipInputReset: true,
+      autoTitle: false,
+      retryMessageId: assistantMessageId,
+    })
+  }, [messages, chatLoading, versionIndices])
+
   const renderActivePaperChips = () => {
     if (!activePapers.length) return null
     return (
@@ -1133,7 +1183,12 @@ function ChatWindow() {
         /* 有消息时：正常的消息列表 + 底部输入框布局 */
         <>
           <div className="flex-1 bg-white min-h-0 overflow-hidden">
-            <MessageList messages={messages} ref={messagesContainerRef} onRetry={handleRetryMessage} />
+            <MessageList
+              messages={messages}
+              ref={messagesContainerRef}
+              onRetry={handleRetryMessage}
+              onSubmitUserEdit={handleSubmitUserEdit}
+            />
           </div>
           <div className="p-4 bg-white flex-shrink-0">
             <div className="max-w-3xl mx-auto">

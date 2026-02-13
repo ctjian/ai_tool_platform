@@ -10,13 +10,18 @@ import a11yOneLight from 'react-syntax-highlighter/dist/esm/styles/prism/a11y-on
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
-import { Copy, Check, RotateCcw, ChevronLeft, ChevronRight, Loader2, AlertCircle } from 'lucide-react'
+import { Copy, Check, RotateCcw, ChevronLeft, ChevronRight, Loader2, AlertCircle, Pencil, X } from 'lucide-react'
 import { addToast } from './ui'
 import 'katex/dist/katex.min.css'
 
 interface MessageListProps {
   messages: Message[]
   onRetry?: (assistantMessageId: string) => void
+  onSubmitUserEdit?: (payload: {
+    userMessageId: string
+    assistantMessageId: string
+    content: string
+  }) => Promise<void> | void
 }
 
 let mermaidInitialized = false
@@ -82,9 +87,12 @@ const MermaidBlock: React.FC<{ chart: string }> = ({ chart }) => {
 }
 
 const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
-  ({ messages, onRetry }, ref) => {
+  ({ messages, onRetry, onSubmitUserEdit }, ref) => {
     const [copiedId, setCopiedId] = useState<string | null>(null)
     const [previewImage, setPreviewImage] = useState<string | null>(null)
+    const [editingUserMessageId, setEditingUserMessageId] = useState<string | null>(null)
+    const [editingAssistantMessageId, setEditingAssistantMessageId] = useState<string | null>(null)
+    const [editingContent, setEditingContent] = useState('')
     const { versionIndices, setVersionIndices, setMessages } = useAppStore()
 
     const handleCopy = async (content: string, msgId: string) => {
@@ -298,7 +306,7 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
     return (
       <div ref={ref} className="h-full min-h-0 overflow-y-auto overscroll-contain px-6 py-4 bg-white">
         <div className="max-w-3xl mx-auto space-y-6">
-            {visibleMessages.map((msg) => {
+            {visibleMessages.map((msg, msgIdx) => {
               const totalVersions = getTotalVersions(msg)
               const currentVersionIndex = versionIndices[msg.id] ?? 0
               const displayVersionIndex = totalVersions > 0
@@ -333,30 +341,128 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
               const thinkingCollapsed = msg.thinking_collapsed ?? true
               const thinkingDone = msg.thinking_done ?? !isWaiting
               const thinkingLabel = thinkingDone ? '思考完成' : '正在思考'
+              const userReplyInfo = msg.role === 'user'
+                ? (() => {
+                    for (let i = msgIdx + 1; i < visibleMessages.length; i += 1) {
+                      const next = visibleMessages[i]
+                      if (next.role === 'user') return { completed: false, assistantId: null as string | null }
+                      if (next.role === 'assistant') {
+                        const nextContent = getMessageContent(next)
+                        if (nextContent === '__waiting__') return { completed: false, assistantId: next.id }
+                        return {
+                          completed: Boolean(nextContent && nextContent.trim()),
+                          assistantId: next.id,
+                        }
+                      }
+                    }
+                    return { completed: false, assistantId: null as string | null }
+                  })()
+                : { completed: false, assistantId: null as string | null }
+              const userReplyCompleted = userReplyInfo.completed
+              const editingThisUser = editingUserMessageId === msg.id
               
               return (
               <div key={msg.id} className="flex flex-col">
                 {msg.role === 'user' ? (
                   <div className="flex justify-end">
-                    <div className="max-w-[80%] bg-gray-100 text-gray-900 rounded-2xl px-4 py-2.5">
-                                            {/* 图片预览 */}
-                                            {msg.images && msg.images.length > 0 && (
-                                              <div className="flex gap-2 mb-2 flex-wrap">
-                                                {msg.images.map((img, idx) => (
-                                                  <img
-                                                    key={idx}
-                                                    src={img}
-                                                    alt={`图片 ${idx + 1}`}
-                                                    className="max-w-xs max-h-48 rounded-lg object-contain cursor-pointer"
-                                                    onClick={() => setPreviewImage(img)}
-                                                  />
-                                                ))}
-                                              </div>
-                                            )}
-                    {/* 文本内容（原始文本，不渲染） */}
-                    <div className="text-gray-900 max-h-64 overflow-y-auto pr-1 whitespace-pre-wrap break-words">
-                      {msg.content}
-                    </div>
+                    <div className={`group ${editingThisUser ? 'w-full max-w-full' : 'max-w-[80%]'}`}>
+                      <div className="bg-gray-100 text-gray-900 rounded-2xl px-4 py-2.5">
+                        {/* 图片预览 */}
+                        {msg.images && msg.images.length > 0 && (
+                          <div className="flex gap-2 mb-2 flex-wrap">
+                            {msg.images.map((img, idx) => (
+                              <img
+                                key={idx}
+                                src={img}
+                                alt={`图片 ${idx + 1}`}
+                                className="max-w-xs max-h-48 rounded-lg object-contain cursor-pointer"
+                                onClick={() => setPreviewImage(img)}
+                              />
+                            ))}
+                          </div>
+                        )}
+                        {/* 文本内容（原始文本，不渲染） */}
+                        {editingThisUser ? (
+                          <div className="space-y-2">
+                            <textarea
+                              value={editingContent}
+                              onChange={(e) => setEditingContent(e.target.value)}
+                              rows={4}
+                              className="w-full resize-none bg-gray-100 px-0 py-0 text-sm text-gray-900 focus:outline-none focus:ring-0 border-0"
+                            />
+                            <div className="flex justify-end gap-2">
+                              <button
+                                onClick={() => {
+                                  setEditingUserMessageId(null)
+                                  setEditingAssistantMessageId(null)
+                                  setEditingContent('')
+                                }}
+                                className="h-8 w-8 rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-800 flex items-center justify-center"
+                                title="取消编辑"
+                              >
+                                <X size={14} />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  const nextContent = editingContent.trim()
+                                  if (!nextContent) {
+                                    addToast('编辑内容不能为空', 'warning')
+                                    return
+                                  }
+                                  if (!editingAssistantMessageId) {
+                                    addToast('未找到对应回复，无法提交编辑', 'error')
+                                    return
+                                  }
+                                  setEditingUserMessageId(null)
+                                  setEditingAssistantMessageId(null)
+                                  setEditingContent('')
+                                  void Promise.resolve(
+                                    onSubmitUserEdit?.({
+                                      userMessageId: msg.id,
+                                      assistantMessageId: editingAssistantMessageId,
+                                      content: nextContent,
+                                    })
+                                  )
+                                }}
+                                className="h-8 w-8 rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-800 flex items-center justify-center"
+                                title="确认编辑"
+                              >
+                                <Check size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-gray-900 max-h-64 overflow-y-auto pr-1 whitespace-pre-wrap break-words">
+                            {msg.content}
+                          </div>
+                        )}
+                      </div>
+                      {userReplyCompleted && !editingThisUser && (
+                        <div className="mt-1 flex justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => handleCopy(msg.content || '', `${msg.id}-user-copy`)}
+                            className="h-8 w-8 rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-800 flex items-center justify-center"
+                            title="复制"
+                          >
+                            {copiedId === `${msg.id}-user-copy` ? (
+                              <Check size={14} className="text-green-600" />
+                            ) : (
+                              <Copy size={14} />
+                            )}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setEditingUserMessageId(msg.id)
+                              setEditingAssistantMessageId(userReplyInfo.assistantId)
+                              setEditingContent(msg.content || '')
+                            }}
+                            className="h-8 w-8 rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-800 flex items-center justify-center"
+                            title="编辑"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : (
