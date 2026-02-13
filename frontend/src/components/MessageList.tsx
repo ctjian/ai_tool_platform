@@ -302,6 +302,16 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
       () => messages.filter((msg) => msg.role !== 'system'),
       [messages]
     )
+    const latestRetryableAssistantId = useMemo(() => {
+      for (let i = visibleMessages.length - 1; i >= 0; i -= 1) {
+        const msg = visibleMessages[i]
+        if (msg.role !== 'assistant') continue
+        const content = getMessageContent(msg)
+        if (!content || content === '__waiting__') continue
+        return msg.id
+      }
+      return null
+    }, [visibleMessages, versionIndices])
 
     return (
       <div ref={ref} className="h-full min-h-0 overflow-y-auto overscroll-contain px-6 py-4 bg-white">
@@ -388,7 +398,7 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
                               value={editingContent}
                               onChange={(e) => setEditingContent(e.target.value)}
                               rows={4}
-                              className="w-full resize-none bg-gray-100 px-0 py-0 text-sm text-gray-900 focus:outline-none focus:ring-0 border-0"
+                              className="w-full resize-none bg-gray-100 px-0 py-0 text-base text-gray-900 focus:outline-none focus:ring-0 border-0"
                             />
                             <div className="flex justify-end gap-2">
                               <button
@@ -611,13 +621,15 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
                             <Copy size={14} className="text-gray-600" />
                           )}
                         </button>
-                        <button
-                          onClick={() => onRetry?.(msg.id)}
-                          className="flex items-center gap-1 px-2 py-1 hover:bg-gray-100 rounded"
-                          title="重试"
-                        >
-                          <RotateCcw size={14} className="text-gray-600" />
-                        </button>
+                        {msg.id === latestRetryableAssistantId && (
+                          <button
+                            onClick={() => onRetry?.(msg.id)}
+                            className="flex items-center gap-1 px-2 py-1 hover:bg-gray-100 rounded"
+                            title="重试"
+                          >
+                            <RotateCcw size={14} className="text-gray-600" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>

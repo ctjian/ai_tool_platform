@@ -44,10 +44,6 @@ class Settings(BaseSettings):
     PRICE_GROUP_RATIO: float = 1.5  # 分组倍率
     PRICE_CURRENCY: str = "USD"
     
-    # 日志配置
-    LOG_LEVEL: str = "INFO"
-    LOG_FILE: str = "./logs/app.log"
-
     # 论文解析（arXiv + GROBID）
     GROBID_URL: str = "https://lfoppiano-grobid.hf.space"
     PAPER_DATA_DIR: str = str(Path(__file__).resolve().parents[1] / "data" / "chat" / "papers")

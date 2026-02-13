@@ -25,7 +25,6 @@ const ARXIV_DEFAULT_EXTRA_PROMPT = [
   "Keep all numbers, percentages, units, and variable symbols unchanged.",
   "Use formal and concise academic Chinese; avoid colloquial wording.",
 ].join('\n')
-const ARXIV_DEFAULT_MODEL = 'gpt-4o-mini'
 const BIB_PRIORITY_FIELDS = [
   'author',
   'title',
@@ -281,6 +280,7 @@ export const CustomToolsPage = () => {
   const [arxivConcurrency, setArxivConcurrency] = useState('16')
   const [arxivModelGroup, setArxivModelGroup] = useState('')
   const [arxivModel, setArxivModel] = useState('')
+  const [arxivDefaultModel, setArxivDefaultModel] = useState('')
   const [arxivJob, setArxivJob] = useState<ArxivTranslateJob | null>(null)
   const [arxivHistory, setArxivHistory] = useState<ArxivTranslateHistoryItem[]>([])
   const [expandedHistoryJobId, setExpandedHistoryJobId] = useState<string | null>(null)
@@ -344,6 +344,18 @@ export const CustomToolsPage = () => {
     }
   }
 
+  const loadArxivDefaultModel = async () => {
+    try {
+      const res = await apiClient.getDefaultConfig()
+      const model = (res.data.custom_tool_defaults?.arxiv_translate?.model || '').trim()
+      if (model) {
+        setArxivDefaultModel(model)
+      }
+    } catch (error) {
+      console.error('Failed to load default arxiv translate model:', error)
+    }
+  }
+
   useEffect(() => {
     if (!arxivJob) return
     if (!['queued', 'running'].includes(arxivJob.status)) return
@@ -364,6 +376,7 @@ export const CustomToolsPage = () => {
     if (selectedToolId !== 'arxiv-latex-translate') return
     refreshArxivHistory()
     restoreActiveArxivJob()
+    loadArxivDefaultModel()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedToolId])
 
@@ -376,7 +389,7 @@ export const CustomToolsPage = () => {
   }, [arxivJob?.job_id, arxivJob?.status, selectedToolId])
 
   useEffect(() => {
-    const preferredModel = ARXIV_DEFAULT_MODEL
+    const preferredModel = arxivDefaultModel || apiConfig.model
     const currentModel = arxivModel || preferredModel || apiConfig.model
     if (modelGroupOptions.length > 0) {
       const matchedGroup =
@@ -389,7 +402,7 @@ export const CustomToolsPage = () => {
       }
       const groupModels = modelGroupOptions.find((g) => g.name === arxivModelGroup)?.models || []
       if (!arxivModel || !groupModels.includes(arxivModel)) {
-        const nextModel = groupModels.includes(preferredModel)
+        const nextModel = (preferredModel && groupModels.includes(preferredModel))
           ? preferredModel
           : groupModels.includes(apiConfig.model)
             ? apiConfig.model
@@ -400,7 +413,7 @@ export const CustomToolsPage = () => {
     }
 
     if ((!arxivModel || !fallbackModelOptions.includes(arxivModel)) && fallbackModelOptions.length > 0) {
-      const next = fallbackModelOptions.includes(preferredModel)
+      const next = (preferredModel && fallbackModelOptions.includes(preferredModel))
         ? preferredModel
         : fallbackModelOptions.includes(apiConfig.model)
           ? apiConfig.model
@@ -409,6 +422,7 @@ export const CustomToolsPage = () => {
     }
   }, [
     apiConfig.model,
+    arxivDefaultModel,
     arxivModel,
     arxivModelGroup,
     fallbackModelOptions,
@@ -443,7 +457,7 @@ export const CustomToolsPage = () => {
           input_text: arxivInput.trim(),
           api_key: apiConfig.api_key || undefined,
           base_url: apiConfig.base_url || undefined,
-          model: arxivModel || ARXIV_DEFAULT_MODEL || apiConfig.model || undefined,
+          model: arxivModel || arxivDefaultModel || apiConfig.model || undefined,
           target_language: arxivTargetLang,
           extra_prompt: arxivExtraPrompt,
           allow_cache: arxivAllowCache,

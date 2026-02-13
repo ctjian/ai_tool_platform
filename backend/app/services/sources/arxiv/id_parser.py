@@ -16,10 +16,6 @@ class ArxivParseError(ValueError):
     """Base class for arXiv parse errors."""
 
 
-class MultipleArxivReferencesError(ArxivParseError):
-    """Raised when more than one unique arXiv reference is found."""
-
-
 @dataclass(frozen=True)
 class ArxivTarget:
     """Normalized arXiv target extracted from user input."""

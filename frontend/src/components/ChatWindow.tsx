@@ -501,6 +501,67 @@ function ChatWindow() {
         if (flushTimer !== null) return
         flushTimer = window.setInterval(() => flushBuffers(false), flushIntervalMs)
       }
+      const stopStreamingUi = () => {
+        flushBuffers(true)
+        pendingContent = ''
+        pendingThinking = ''
+        stopFlush()
+        setIsStreaming(false)
+        setChatLoading(false)
+      }
+      const upsertCompleteAssistantMessage = (completeMessage: any) => {
+        setMessages((msgs) => {
+          const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
+          if (msgIdx >= 0) {
+            const updatedMsgs = [...msgs]
+            const prev = updatedMsgs[msgIdx] as any
+            updatedMsgs[msgIdx] = {
+              ...completeMessage,
+              thinking_collapsed: prev?.thinking_collapsed ?? (completeMessage.thinking ? true : undefined),
+              thinking_done: true,
+            }
+            return updatedMsgs
+          }
+          return msgs
+        })
+        setVersionIndices({ ...versionIndices, [assistantMessageId]: 0 })
+      }
+      const ensureAssistantMessageId = () => {
+        if (!assistantMessageId) return
+        setMessages((msgs) => {
+          const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
+          if (msgIdx >= 0) return msgs
+          const lastIdx = [...msgs].reverse().findIndex(m => m.role === 'assistant')
+          if (lastIdx >= 0) {
+            const realIdx = msgs.length - 1 - lastIdx
+            const updatedMsgs = [...msgs]
+            updatedMsgs[realIdx] = { ...updatedMsgs[realIdx], id: assistantMessageId }
+            return updatedMsgs
+          }
+          return msgs
+        })
+      }
+      const markAssistantThinkingDone = () => {
+        if (!assistantMessageId) return
+        setMessages((msgs) =>
+          msgs.map((m) =>
+            m.id === assistantMessageId ? { ...m, thinking_done: true } : m
+          )
+        )
+      }
+      const finalizeAssistantTerminal = (
+        completeMessage?: any,
+        options?: { ensureAssistantId?: boolean }
+      ) => {
+        stopStreamingUi()
+        if (completeMessage) {
+          upsertCompleteAssistantMessage(completeMessage)
+        } else if (options?.ensureAssistantId) {
+          ensureAssistantMessageId()
+        }
+        clearWaitingMessage()
+        markAssistantThinkingDone()
+      }
       let firstTokenReceived = false // 标记是否接收到第一个token
       if (!retryMessageId) {
         waitingMessageId = `waiting-${Date.now()}`
@@ -638,127 +699,25 @@ function ChatWindow() {
             }
           }
         } else if (event === 'done') {
-          // 最后把剩余内容快速刷完
-          flushBuffers(true)
-          pendingContent = ''
-          pendingThinking = ''
-          stopFlush()
-          setIsStreaming(false)
-          setChatLoading(false)
-          
-          // 如果后端返回了完整的消息对象（包含retry_versions），用它更新消息
-          if (data && typeof data === 'object' && 'message' in data) {
-            const completeMessage = (data as any).message
-            setMessages((msgs) => {
-              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
-              if (msgIdx >= 0) {
-                const updatedMsgs = [...msgs]
-                const prev = updatedMsgs[msgIdx] as any
-                updatedMsgs[msgIdx] = {
-                  ...completeMessage,
-                  thinking_collapsed: prev?.thinking_collapsed ?? (completeMessage.thinking ? true : undefined),
-                  thinking_done: true,
-                }
-                return updatedMsgs
-              }
-              return msgs
-            })
-            // 收到完整消息后，默认选中最新版本
-            setVersionIndices({ ...versionIndices, [assistantMessageId]: 0 })
-          } else if (assistantMessageId) {
-            // 兜底：确保消息ID正确（避免使用临时ID导致重试记录丢失）
-            setMessages((msgs) => {
-              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
-              if (msgIdx >= 0) return msgs
-              // 如果找不到，尝试用最新一条assistant消息替换ID
-              const lastIdx = [...msgs].reverse().findIndex(m => m.role === 'assistant')
-              if (lastIdx >= 0) {
-                const realIdx = msgs.length - 1 - lastIdx
-                const updatedMsgs = [...msgs]
-                updatedMsgs[realIdx] = { ...updatedMsgs[realIdx], id: assistantMessageId }
-                return updatedMsgs
-              }
-              return msgs
-            })
-          }
-          clearWaitingMessage()
-          if (assistantMessageId) {
-            setMessages((msgs) =>
-              msgs.map((m) =>
-                m.id === assistantMessageId ? { ...m, thinking_done: true } : m
-              )
-            )
-          }
+          const completeMessage =
+            data && typeof data === 'object' && 'message' in data
+              ? (data as any).message
+              : undefined
+          finalizeAssistantTerminal(completeMessage, { ensureAssistantId: true })
           break
         } else if (event === 'stopped') {
-          // 停止事件 - 也需要刷新缓冲区
-          flushBuffers(true)
-          pendingContent = ''
-          pendingThinking = ''
-          stopFlush()
-          setIsStreaming(false)
-          setChatLoading(false)
-          
-          if (data && typeof data === 'object' && 'message' in data) {
-            const completeMessage = (data as any).message
-            setMessages((msgs) => {
-              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
-              if (msgIdx >= 0) {
-                const updatedMsgs = [...msgs]
-                const prev = updatedMsgs[msgIdx] as any
-                updatedMsgs[msgIdx] = {
-                  ...completeMessage,
-                  thinking_collapsed: prev?.thinking_collapsed ?? (completeMessage.thinking ? true : undefined),
-                  thinking_done: true,
-                }
-                return updatedMsgs
-              }
-              return msgs
-            })
-            setVersionIndices({ ...versionIndices, [assistantMessageId]: 0 })
-          } else if (assistantMessageId) {
-            setMessages((msgs) => {
-              const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
-              if (msgIdx >= 0) return msgs
-              const lastIdx = [...msgs].reverse().findIndex(m => m.role === 'assistant')
-              if (lastIdx >= 0) {
-                const realIdx = msgs.length - 1 - lastIdx
-                const updatedMsgs = [...msgs]
-                updatedMsgs[realIdx] = { ...updatedMsgs[realIdx], id: assistantMessageId }
-                return updatedMsgs
-              }
-              return msgs
-            })
-          }
-
-          clearWaitingMessage()
-          if (assistantMessageId) {
-            setMessages((msgs) =>
-              msgs.map((m) =>
-                m.id === assistantMessageId ? { ...m, thinking_done: true } : m
-              )
-            )
-          }
+          const completeMessage =
+            data && typeof data === 'object' && 'message' in data
+              ? (data as any).message
+              : undefined
+          finalizeAssistantTerminal(completeMessage, { ensureAssistantId: true })
           break
         } else if (event === 'error') {
           // 错误事件
           if (data && typeof data === 'object' && 'error' in data) {
             throw new Error((data as any).error)
           }
-          flushBuffers(true)
-          pendingContent = ''
-          pendingThinking = ''
-          stopFlush()
-          setIsStreaming(false)
-          setChatLoading(false)
-          clearWaitingMessage()
-          if (assistantMessageId) {
-            setMessages((msgs) =>
-              msgs.map((m) =>
-                m.id === assistantMessageId ? { ...m, thinking_done: true } : m
-              )
-            )
-          }
+          finalizeAssistantTerminal(undefined, { ensureAssistantId: false })
           break
         }
       }
@@ -864,6 +823,10 @@ function ChatWindow() {
 
   const handleRetryMessage = useCallback(async (assistantMessageId: string) => {
     if (chatLoading) return
+    const latestAssistant = [...messages].reverse().find(
+      (m) => m.role === 'assistant' && Boolean((m.content || '').trim()) && m.content !== '__waiting__'
+    )
+    if (!latestAssistant || latestAssistant.id !== assistantMessageId) return
     const idx = messages.findIndex(m => m.id === assistantMessageId)
     if (idx <= 0) return
 
