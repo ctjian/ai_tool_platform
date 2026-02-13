@@ -2,11 +2,13 @@
 from openai import AsyncOpenAI
 from typing import AsyncGenerator, Dict, Any
 import json
-import json
+import logging
 from httpx import Timeout
 
 from app.schemas.chat import APIConfig
 from app.config import settings
+
+logger = logging.getLogger("uvicorn.error")
 
 
 async def stream_chat_completion(
@@ -251,6 +253,6 @@ async def generate_title_for_conversation(messages: list, api_config=None) -> st
         return title if title else "新对话"
     
     except Exception as e:
-        print(f"生成标题失败: {str(e)}")
+        logger.warning("生成标题失败: %s", str(e))
         # 如果生成失败，使用用户消息的前10个字作为标题
         return user_message[:10].strip() + ("..." if len(user_message) > 10 else "")

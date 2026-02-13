@@ -1,20 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button, Modal, ModalFooter, Input, Select, Form, FormGroup, addToast, Loading } from '../../components/ui';
 import apiClient from '../../api/client';
-
-interface Tool {
-  id: string;
-  name: string;
-  category_id: string;
-  icon: string;
-  description: string;
-  system_prompt: string;
-}
-
-interface Category {
-  id: string;
-  name: string;
-}
+import type { Category, Tool } from '../../types/api';
 
 export const ToolManagementPage = () => {
   const [tools, setTools] = useState<Tool[]>([]);

@@ -16,7 +16,7 @@ from app.schemas.custom_tool import (
     ArxivTranslateJobResponse,
     ArxivTranslateHistoryResponse,
 )
-from app.custom_tools.bib_store import bib_store
+from app.custom_tools.bib_lookup.bib_store import bib_store
 from app.custom_tools.arxiv_translate.service import (
     create_job as create_arxiv_translate_job,
     get_job as get_arxiv_translate_job,

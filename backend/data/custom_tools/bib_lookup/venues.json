@@ -1,0 +1,215 @@
+{
+  "venues": [
+    {
+      "id": "NAACL",
+      "abbr": "Proc. of NAACL-HLT",
+      "full_name": "Proceedings of the Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bNAACL\\b",
+        "(?i)North American Chapter.*Computational Linguistics.*Human Language Technologies"
+      ]
+    },
+    {
+      "id": "ACL",
+      "abbr": "Proc. of ACL",
+      "full_name": "Proceedings of the Annual Meeting of the Association for Computational Linguistics",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bACL\\b",
+        "(?i)Annual Meeting of the Association for Computational Linguistics"
+      ]
+    },
+    {
+      "id": "EMNLP",
+      "abbr": "Proc. of EMNLP",
+      "full_name": "Proceedings of the Conference on Empirical Methods in Natural Language Processing",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bEMNLP\\b",
+        "(?i)Empirical Methods in Natural Language Processing"
+      ]
+    },
+    {
+      "id": "AAAI",
+      "abbr": "Proc. of AAAI",
+      "full_name": "Proceedings of the AAAI Conference on Artificial Intelligence",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bAAAI\\b",
+        "(?i)AAAI Conference on Artificial Intelligence"
+      ]
+    },
+    {
+      "id": "IJCAI",
+      "abbr": "Proc. of IJCAI",
+      "full_name": "Proceedings of the International Joint Conference on Artificial Intelligence",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bIJCAI\\b",
+        "(?i)International Joint Conference on Artificial Intelligence"
+      ]
+    },
+    {
+      "id": "NeurIPS",
+      "abbr": "Proc. of NeurIPS",
+      "full_name": "Proceedings of the Conference on Neural Information Processing Systems",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bNeurIPS\\b",
+        "(?i)\\bNIPS\\b",
+        "(?i)Neural Information Processing Systems"
+      ]
+    },
+    {
+      "id": "ICML",
+      "abbr": "Proc. of ICML",
+      "full_name": "Proceedings of the International Conference on Machine Learning",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bICML\\b",
+        "(?i)International Conference on Machine Learning"
+      ]
+    },
+    {
+      "id": "ICLR",
+      "abbr": "Proc. of ICLR",
+      "full_name": "Proceedings of the International Conference on Learning Representations",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bICLR\\b",
+        "(?i)International Conference on Learning Representations"
+      ]
+    },
+    {
+      "id": "CVPR",
+      "abbr": "Proc. of CVPR",
+      "full_name": "Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bCVPR\\b",
+        "(?i)Computer Vision and Pattern Recognition"
+      ]
+    },
+    {
+      "id": "ICCV",
+      "abbr": "Proc. of ICCV",
+      "full_name": "Proceedings of the IEEE/CVF International Conference on Computer Vision",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bICCV\\b",
+        "(?i)International Conference on Computer Vision"
+      ]
+    },
+    {
+      "id": "ECCV",
+      "abbr": "Proc. of ECCV",
+      "full_name": "Proceedings of the European Conference on Computer Vision",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bECCV\\b",
+        "(?i)European Conference on Computer Vision"
+      ]
+    },
+    {
+      "id": "KDD",
+      "abbr": "Proc. of KDD",
+      "full_name": "Proceedings of the ACM SIGKDD International Conference on Knowledge Discovery and Data Mining",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bKDD\\b",
+        "(?i)Knowledge Discovery.*Data Mining"
+      ]
+    },
+    {
+      "id": "SIGMOD",
+      "abbr": "Proc. of SIGMOD",
+      "full_name": "Proceedings of the ACM SIGMOD International Conference on Management of Data",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bSIGMOD\\b",
+        "(?i)International Conference on Management of Data"
+      ]
+    },
+    {
+      "id": "SIGIR",
+      "abbr": "Proc. of SIGIR",
+      "full_name": "Proceedings of the ACM SIGIR Conference on Research and Development in Information Retrieval",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bSIGIR\\b",
+        "(?i)Research and Development in Information Retrieval"
+      ]
+    },
+    {
+      "id": "WWW",
+      "abbr": "Proc. of WWW",
+      "full_name": "Proceedings of the ACM Web Conference",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bWWW\\b",
+        "(?i)Web Conference"
+      ]
+    },
+    {
+      "id": "ICDE",
+      "abbr": "Proc. of ICDE",
+      "full_name": "Proceedings of the IEEE International Conference on Data Engineering",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bICDE\\b",
+        "(?i)International Conference on Data Engineering"
+      ]
+    },
+    {
+      "id": "AISTATS",
+      "abbr": "Proc. of AISTATS",
+      "full_name": "Proceedings of the International Conference on Artificial Intelligence and Statistics",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bAISTATS\\b",
+        "(?i)Artificial Intelligence and Statistics"
+      ]
+    },
+    {
+      "id": "INTERSPEECH",
+      "abbr": "Proc. of INTERSPEECH",
+      "full_name": "Proceedings of Interspeech",
+      "type": "conference",
+      "regex": [
+        "(?i)\\bINTERSPEECH\\b",
+        "(?i)Interspeech"
+      ]
+    },
+    {
+      "id": "TKDE",
+      "abbr": "TKDE",
+      "full_name": "IEEE Transactions on Knowledge and Data Engineering",
+      "type": "journal",
+      "regex": [
+        "(?i)\\bTKDE\\b",
+        "(?i)IEEE Transactions on Knowledge and Data Engineering"
+      ]
+    },
+    {
+      "id": "TPAMI",
+      "abbr": "TPAMI",
+      "full_name": "IEEE Transactions on Pattern Analysis and Machine Intelligence",
+      "type": "journal",
+      "regex": [
+        "(?i)\\bTPAMI\\b",
+        "(?i)IEEE Transactions on Pattern Analysis and Machine Intelligence"
+      ]
+    },
+    {
+      "id": "TNNLS",
+      "abbr": "TNNLS",
+      "full_name": "IEEE Transactions on Neural Networks and Learning Systems",
+      "type": "journal",
+      "regex": [
+        "(?i)\\bTNNLS\\b",
+        "(?i)IEEE Transactions on Neural Networks and Learning Systems"
+      ]
+    }
+  ]
+}

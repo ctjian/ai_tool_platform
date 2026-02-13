@@ -30,12 +30,15 @@ logs/
 # Env files
 .env
 
-# Database files
-*.db
-data/
-# next 2 lines are exceptions to keep pricing.json in version control
+# 只忽略 backend/data 下的内容
+backend/data/**
+# 保留定价文件
 !backend/data/pricing.json
-
+# 保留提示词数据库文件
+!backend/data/ai_tools.db
+!backend/data/custom_tools/
+!backend/data/custom_tools/bib_lookup/
+!backend/data/custom_tools/bib_lookup/venues.json
 # OS / Editor
 .DS_Store
 .idea/

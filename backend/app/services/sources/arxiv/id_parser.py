@@ -128,16 +128,6 @@ def extract_arxiv_targets(
     return found
 
 
-def extract_single_arxiv_target(message: str) -> Optional[ArxivTarget]:
-    """Parse at most one arXiv reference from the whole input message."""
-    found = extract_arxiv_targets(message)
-    if not found:
-        return None
-    if len(found) > 1:
-        raise MultipleArxivReferencesError("一次只支持解析一篇 arXiv 论文，请只保留一个链接或ID。")
-    return found[0]
-
-
 def build_target_from_ids(
     paper_id: str,
     canonical_id: Optional[str] = None,

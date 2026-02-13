@@ -7,8 +7,11 @@ Review note:
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 from typing import AsyncGenerator
+import logging
 
 from app.config import settings
+
+logger = logging.getLogger("uvicorn.error")
 
 # 创建工具数据库异步引擎（分类、工具、配置）
 tools_engine = create_async_engine(
@@ -83,7 +86,7 @@ async def init_db() -> None:
             Tool.__table__,
             Config.__table__,
         ])
-        print("✅ 工具数据库表创建成功")
+        logger.info("工具数据库表创建成功")
     
     # 创建对话历史数据库表
     async with chat_engine.begin() as conn:
@@ -105,4 +108,4 @@ async def init_db() -> None:
             await conn.exec_driver_sql("ALTER TABLE messages ADD COLUMN thinking TEXT")
         if "extra" not in message_columns:
             await conn.exec_driver_sql("ALTER TABLE messages ADD COLUMN extra TEXT")
-        print("✅ 对话历史数据库表创建成功")
+        logger.info("对话历史数据库表创建成功")

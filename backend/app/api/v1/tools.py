@@ -2,7 +2,6 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
-import os
 import uuid
 from pathlib import Path
 

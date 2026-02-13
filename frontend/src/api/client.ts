@@ -27,7 +27,6 @@ export const apiClient = {
   // 工具相关
   getTools: (categoryId?: string) => 
     api.get<{ tools: Tool[] }>('/tools', { params: { category_id: categoryId } }),
-  getTool: (toolId: string) => api.get<Tool>(`/tools/${toolId}`),
   updateTool: (toolId: string, data: Partial<Tool>) =>
     api.put<Tool>(`/tools/${toolId}`, data),
   

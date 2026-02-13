@@ -892,6 +892,10 @@ function ChatWindow() {
           thinking_collapsed: true,
           thinking_done: false,
           cost_meta: null,
+          extra: {
+            ...(updated[msgIdx] as any).extra,
+            status_steps: [],
+          },
         }
         return updated
       }

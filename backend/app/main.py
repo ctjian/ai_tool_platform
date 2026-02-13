@@ -7,17 +7,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+import logging
 import os
 
 from app.config import settings
 from app.database import init_db
+
+logger = logging.getLogger("uvicorn.error")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时执行
-    print("🚀 启动AI工具平台后端...")
+    logger.info("启动AI工具平台后端...")
     
     # 确保必要的目录存在
     os.makedirs("data", exist_ok=True)
@@ -29,14 +32,14 @@ async def lifespan(app: FastAPI):
     # 初始化数据库
     await init_db()
     
-    print("✅ 数据库初始化完成")
-    print(f"📡 服务器运行在: http://0.0.0.0:8000")
-    print(f"📚 API文档: http://0.0.0.0:8000/docs")
+    logger.info("数据库初始化完成")
+    logger.info("服务器运行在: http://0.0.0.0:8000")
+    logger.info("API文档: http://0.0.0.0:8000/docs")
     
     yield
     
     # 关闭时执行
-    print("👋 关闭AI工具平台后端...")
+    logger.info("关闭AI工具平台后端...")
 
 
 # 创建FastAPI应用

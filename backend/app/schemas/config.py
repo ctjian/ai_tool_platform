@@ -1,7 +1,6 @@
 """配置相关的Pydantic schemas"""
 from pydantic import BaseModel, Field
 from typing import Optional
-from datetime import datetime
 
 
 class APIConfigResponse(BaseModel):

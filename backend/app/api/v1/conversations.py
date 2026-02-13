@@ -7,8 +7,9 @@ Review note:
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
-from typing import List, Optional, Dict, Any
+from typing import Optional, Dict, Any
 import json
+import logging
 
 from app.database import get_session, get_chat_session
 from app.crud.conversation import conversation_crud, message_crud
@@ -34,6 +35,7 @@ from app.services.session.paper_state import (
 )
 
 router = APIRouter()
+logger = logging.getLogger("uvicorn.error")
 
 
 async def upsert_system_prompt(
@@ -402,5 +404,5 @@ async def generate_conversation_title(
             "conversation_id": conversation_id
         }
     except Exception as e:
-        print(f"标题生成错误: {str(e)}")
+        logger.exception("标题生成错误 conversation_id=%s", conversation_id)
         raise HTTPException(status_code=500, detail=f"生成标题失败: {str(e)}")

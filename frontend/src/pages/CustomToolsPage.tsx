@@ -1,7 +1,7 @@
 // Review note:
 // - 新增“Arxiv论文精细翻译”自定义工具页逻辑（提交任务、轮询状态、下载产物）。
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle, Input, Button, Loading } from '../components/ui'
+import { Card, CardContent, CardHeader, CardTitle, Input, Button, Loading, addToast } from '../components/ui'
 import apiClient from '../api/client'
 import { useAppStore } from '../store/app'
 import { ArxivTranslateHistoryItem, ArxivTranslateJob } from '../types/api'
@@ -26,6 +26,183 @@ const ARXIV_DEFAULT_EXTRA_PROMPT = [
   "Use formal and concise academic Chinese; avoid colloquial wording.",
 ].join('\n')
 const ARXIV_DEFAULT_MODEL = 'gpt-4o-mini'
+const BIB_PRIORITY_FIELDS = [
+  'author',
+  'title',
+  'journal', // 期刊， 一般用于期刊论文
+  'booktitle', // 会议录，一般用于会议论文
+  'publisher', // 出版社，一般用于书籍
+  'volume',
+  'number',
+  'pages',
+  'year',
+  'doi'
+]
+const BIB_IGNORED_FIELDS = new Set(['bibsource', 'timestamp'])
+
+interface BibField {
+  name: string
+  value: string
+  lowerName: string
+}
+
+const unwrapBibValue = (value: string) => {
+  const text = value.trim()
+  if (text.startsWith('{') && text.endsWith('}')) {
+    return { inner: text.slice(1, -1), wrapper: 'brace' as const }
+  }
+  if (text.startsWith('"') && text.endsWith('"')) {
+    return { inner: text.slice(1, -1), wrapper: 'quote' as const }
+  }
+  return { inner: text, wrapper: 'raw' as const }
+}
+
+const wrapBibValue = (inner: string, wrapper: 'brace' | 'quote' | 'raw') => {
+  if (wrapper === 'brace') return `{${inner}}`
+  if (wrapper === 'quote') return `"${inner}"`
+  return inner
+}
+
+const normalizeAuthorValue = (value: string) => {
+  const { inner, wrapper } = unwrapBibValue(value)
+  const normalizedInner = inner
+    .replace(/\s+/g, ' ')
+    .replace(/\s+and\s+/gi, ' and ')
+    .trim()
+  if (!normalizedInner) return value
+
+  const authors = normalizedInner.split(/\s+and\s+/i).map((a) => a.trim()).filter(Boolean)
+  if (authors.length === 0) return value
+
+  const converted = authors.map((author) => {
+    if (author.includes(',')) return author
+    const tokens = author.split(/\s+/).filter(Boolean)
+    if (tokens.length < 2) return author
+    const last = tokens[tokens.length - 1]
+    const first = tokens.slice(0, -1).join(' ')
+    return `${last}, ${first}`
+  })
+  return wrapBibValue(converted.join(' and '), wrapper)
+}
+
+const readBalancedBraces = (text: string, start: number) => {
+  let i = start
+  let depth = 0
+  while (i < text.length) {
+    const ch = text[i]
+    if (ch === '{') depth += 1
+    if (ch === '}') {
+      depth -= 1
+      if (depth === 0) return i + 1
+    }
+    i += 1
+  }
+  return text.length
+}
+
+const readQuotedValue = (text: string, start: number) => {
+  let i = start + 1
+  while (i < text.length) {
+    const ch = text[i]
+    if (ch === '\\') {
+      i += 2
+      continue
+    }
+    if (ch === '"') return i + 1
+    i += 1
+  }
+  return text.length
+}
+
+const parseBibFields = (body: string): BibField[] => {
+  const fields: BibField[] = []
+  let i = 0
+  while (i < body.length) {
+    while (i < body.length && /[\s,]/.test(body[i])) i += 1
+    if (i >= body.length) break
+
+    const nameStart = i
+    while (i < body.length && /[A-Za-z0-9_:-]/.test(body[i])) i += 1
+    const name = body.slice(nameStart, i).trim()
+    if (!name) break
+
+    while (i < body.length && /\s/.test(body[i])) i += 1
+    if (body[i] !== '=') {
+      while (i < body.length && body[i] !== ',') i += 1
+      continue
+    }
+    i += 1
+    while (i < body.length && /\s/.test(body[i])) i += 1
+    if (i >= body.length) break
+
+    const valueStart = i
+    if (body[i] === '{') {
+      i = readBalancedBraces(body, i)
+    } else if (body[i] === '"') {
+      i = readQuotedValue(body, i)
+    } else {
+      while (i < body.length && body[i] !== ',') i += 1
+    }
+    const value = body.slice(valueStart, i).trim()
+    fields.push({
+      name,
+      value,
+      lowerName: name.toLowerCase(),
+    })
+    while (i < body.length && /\s/.test(body[i])) i += 1
+    if (body[i] === ',') i += 1
+  }
+  return fields
+}
+
+const reorderBibtexFields = (bibtex: string) => {
+  const text = (bibtex || '').trim()
+  const headerMatch = text.match(/^@([A-Za-z0-9_:+-]+)\s*\{\s*([^,]+)\s*,/s)
+  if (!headerMatch) return bibtex
+
+  const entryType = headerMatch[1]
+  const citeKey = headerMatch[2].trim()
+  const headerEnd = headerMatch[0].length
+  const lastBraceIndex = text.lastIndexOf('}')
+  if (lastBraceIndex <= headerEnd) return bibtex
+
+  const body = text.slice(headerEnd, lastBraceIndex)
+  const fields = parseBibFields(body)
+  if (fields.length === 0) return bibtex
+  const filteredFields = fields.filter((field) => !BIB_IGNORED_FIELDS.has(field.lowerName))
+  if (filteredFields.length === 0) return bibtex
+
+  const used = new Set<number>()
+  const ordered: BibField[] = []
+
+  for (const key of BIB_PRIORITY_FIELDS) {
+    filteredFields.forEach((field, idx) => {
+      if (!used.has(idx) && field.lowerName === key) {
+        ordered.push(field)
+        used.add(idx)
+      }
+    })
+  }
+
+  filteredFields.forEach((field, idx) => {
+    if (!used.has(idx)) {
+      ordered.push(field)
+      used.add(idx)
+    }
+  })
+
+  const displayFields = ordered.map((field) => {
+    if (field.lowerName === 'author') {
+      return { ...field, value: normalizeAuthorValue(field.value) }
+    }
+    return field
+  })
+  const maxFieldNameLength = displayFields.reduce((max, field) => Math.max(max, field.name.length), 0)
+  const lines = displayFields.map(
+    (field) => `  ${field.name.padEnd(maxFieldNameLength, ' ')} = ${field.value},`
+  )
+  return `@${entryType}{${citeKey},\n${lines.join('\n')}\n}`
+}
 
 let pdfJsLibPromise: Promise<any> | null = null
 
@@ -96,6 +273,7 @@ export const CustomToolsPage = () => {
   const [output, setOutput] = useState<DemoResponse | null>(null)
   const [bibOutput, setBibOutput] = useState<string | null>(null)
   const [bibCandidates, setBibCandidates] = useState<{ title: string; bibtex: string }[]>([])
+  const [copiedBibKey, setCopiedBibKey] = useState<string | null>(null)
   const [arxivInput, setArxivInput] = useState('')
   const [arxivTargetLang, setArxivTargetLang] = useState('中文')
   const [arxivExtraPrompt, setArxivExtraPrompt] = useState(ARXIV_DEFAULT_EXTRA_PROMPT)
@@ -126,6 +304,18 @@ export const CustomToolsPage = () => {
     const group = modelGroupOptions.find((g) => g.name === arxivModelGroup)
     return group?.models || []
   }, [modelGroupOptions, arxivModelGroup])
+  const displayBibOutput = useMemo(() => {
+    if (!bibOutput) return null
+    return reorderBibtexFields(bibOutput)
+  }, [bibOutput])
+  const displayBibCandidates = useMemo(
+    () =>
+      bibCandidates.map((cand) => ({
+        ...cand,
+        displayBibtex: reorderBibtexFields(cand.bibtex),
+      })),
+    [bibCandidates]
+  )
 
   const refreshArxivHistory = async () => {
     try {
@@ -419,6 +609,31 @@ export const CustomToolsPage = () => {
     }
   }
 
+  const handleCopyBibText = async (value: string, key: string) => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(value)
+      } else {
+        const textarea = document.createElement('textarea')
+        textarea.value = value
+        textarea.setAttribute('readonly', '')
+        textarea.style.position = 'fixed'
+        textarea.style.top = '-9999px'
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+      }
+      setCopiedBibKey(key)
+      addToast('已复制到剪贴板', 'success')
+      window.setTimeout(() => {
+        setCopiedBibKey((prev) => (prev === key ? null : prev))
+      }, 1800)
+    } catch (error) {
+      addToast('复制失败，请手动复制', 'error')
+    }
+  }
+
   return (
     <div className="max-w-6xl mx-auto">
       <div className="mb-8">
@@ -689,22 +904,68 @@ latexdiff --version`}
               {!loading && selectedTool.id === 'bib-lookup' && !bibOutput && bibCandidates.length === 0 && (
                 <p className="text-gray-500">暂无结果</p>
               )}
-              {!loading && selectedTool.id === 'bib-lookup' && bibOutput && (
+              {!loading && selectedTool.id === 'bib-lookup' && displayBibOutput && (
                 <div className="border rounded-lg p-3 bg-gray-50">
-                  <div className="font-semibold text-gray-900 mb-1">BibTeX</div>
+                  <div className="mb-1 font-semibold text-gray-900">BibTeX</div>
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <div className="text-xs text-gray-500">bib库原始引用</div>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => handleCopyBibText(bibOutput || '', 'exact-raw')}
+                    >
+                      {copiedBibKey === 'exact-raw' ? '已复制' : '复制'}
+                    </Button>
+                  </div>
                   <pre className="text-gray-700 whitespace-pre-wrap bg-gray-100 border border-gray-200 rounded-lg p-3">
                     {bibOutput}
                   </pre>
+                  <div className="mt-3 mb-1 flex items-center justify-between gap-2">
+                    <div className="text-xs text-gray-500">标准化展示</div>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => handleCopyBibText(displayBibOutput, 'exact-normalized')}
+                    >
+                      {copiedBibKey === 'exact-normalized' ? '已复制' : '复制'}
+                    </Button>
+                  </div>
+                  <pre className="text-gray-700 whitespace-pre-wrap bg-gray-100 border border-gray-200 rounded-lg p-3">
+                    {displayBibOutput}
+                  </pre>
                 </div>
               )}
-              {!loading && selectedTool.id === 'bib-lookup' && bibCandidates.length > 0 && (
+              {!loading && selectedTool.id === 'bib-lookup' && displayBibCandidates.length > 0 && (
                 <div className="space-y-3">
                   <div className="text-gray-700">未找到精确匹配，以下是候选结果：</div>
-                  {bibCandidates.map((cand, idx) => (
+                  {displayBibCandidates.map((cand, idx) => (
                     <div key={`${cand.title}-${idx}`} className="border rounded-lg p-3">
-                      <div className="font-semibold text-gray-900 mb-1">{cand.title}</div>
+                      <div className="mb-1 font-semibold text-gray-900">{cand.title}</div>
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <div className="text-xs text-gray-500">bib库原始引用</div>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => handleCopyBibText(cand.bibtex, `cand-${idx}-raw`)}
+                        >
+                          {copiedBibKey === `cand-${idx}-raw` ? '已复制' : '复制'}
+                        </Button>
+                      </div>
                       <pre className="text-gray-700 whitespace-pre-wrap bg-gray-100 border border-gray-200 rounded-lg p-3">
                         {cand.bibtex}
+                      </pre>
+                      <div className="mt-3 mb-1 flex items-center justify-between gap-2">
+                        <div className="text-xs text-gray-500">标准化展示</div>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => handleCopyBibText(cand.displayBibtex, `cand-${idx}-normalized`)}
+                        >
+                          {copiedBibKey === `cand-${idx}-normalized` ? '已复制' : '复制'}
+                        </Button>
+                      </div>
+                      <pre className="text-gray-700 whitespace-pre-wrap bg-gray-100 border border-gray-200 rounded-lg p-3">
+                        {cand.displayBibtex}
                       </pre>
                     </div>
                   ))}

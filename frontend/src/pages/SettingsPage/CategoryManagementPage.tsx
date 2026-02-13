@@ -1,14 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Card, Button, Modal, ModalFooter, Input, Form, FormGroup, addToast, Loading } from '../../components/ui';
 import apiClient from '../../api/client';
-
-interface Category {
-  id: string;
-  name: string;
-  icon: string;
-  description: string;
-  order: number;
-}
+import type { Category } from '../../types/api';
 
 export const CategoryManagementPage = () => {
   const [categories, setCategories] = useState<Category[]>([]);

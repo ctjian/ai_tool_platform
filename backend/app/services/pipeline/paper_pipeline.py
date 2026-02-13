@@ -741,12 +741,3 @@ def build_arxiv_context_for_targets(
         },
     )
 
-
-def build_arxiv_context_for_message(message: str, settings) -> Optional[ArxivContextPayload]:
-    """
-    Parse arXiv targets from message and build merged retrieval context.
-    """
-    targets = extract_arxiv_targets(message)
-    if not targets:
-        return None
-    return build_arxiv_context_for_targets(message=message, targets=targets, settings=settings)

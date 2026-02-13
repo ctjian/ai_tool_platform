@@ -1,7 +1,7 @@
 // Review note:
 // - 当消息处于 __waiting__ 阶段时，读取 message.extra.status_steps 渲染论文检索进度列表。
 // - 每个步骤显示运行/完成/失败状态，完成时展示耗时（秒）。
-import React, { forwardRef, useMemo, useState } from 'react'
+import React, { forwardRef, useEffect, useMemo, useState } from 'react'
 import { Message } from '../types/api'
 import { useAppStore } from '../store/app'
 import ReactMarkdown from 'react-markdown'
@@ -17,6 +17,68 @@ import 'katex/dist/katex.min.css'
 interface MessageListProps {
   messages: Message[]
   onRetry?: (assistantMessageId: string) => void
+}
+
+let mermaidInitialized = false
+
+const MermaidBlock: React.FC<{ chart: string }> = ({ chart }) => {
+  const [svg, setSvg] = useState('')
+  const [renderError, setRenderError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    const render = async () => {
+      try {
+        const mermaid = (await import('mermaid')).default
+        if (!mermaidInitialized) {
+          mermaid.initialize({
+            startOnLoad: false,
+            securityLevel: 'loose',
+            theme: 'default',
+          })
+          mermaidInitialized = true
+        }
+        const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        const result = await mermaid.render(id, chart)
+        if (!cancelled) {
+          setSvg(result.svg)
+          setRenderError('')
+        }
+      } catch (error: any) {
+        if (!cancelled) {
+          setSvg('')
+          setRenderError(error?.message || 'Mermaid 渲染失败')
+        }
+      }
+    }
+    render()
+    return () => {
+      cancelled = true
+    }
+  }, [chart])
+
+  if (renderError) {
+    return (
+      <div className="my-3 rounded-2xl bg-red-50 border border-red-200 overflow-hidden">
+        <div className="px-4 py-2 text-xs text-red-700 border-b border-red-200">Mermaid 渲染失败，已回退源码</div>
+        <pre className="px-4 py-3 text-xs text-red-700 whitespace-pre-wrap break-words">{chart}</pre>
+      </div>
+    )
+  }
+
+  if (!svg) {
+    return (
+      <div className="my-3 rounded-2xl bg-gray-50 border border-gray-200 px-4 py-3 text-sm text-gray-600">
+        正在渲染 Mermaid 图...
+      </div>
+    )
+  }
+
+  return (
+    <div className="my-3 rounded-2xl bg-gray-50 border border-gray-200 overflow-auto px-3 py-3">
+      <div className="[&>svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svg }} />
+    </div>
+  )
 }
 
 const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
@@ -150,13 +212,18 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
         </blockquote>
       ),
       code: ({ inline, className, children, ...props }: any) => {
-        const match = /language-(\w+)/.exec(className || '')
+        const match = /language-([\w-]+)/.exec(className || '')
+        const language = (match?.[1] || '').toLowerCase()
+        const code = String(children).replace(/\n$/, '')
+        if (!inline && language === 'mermaid') {
+          return <MermaidBlock chart={code} />
+        }
         return !inline && match ? (
           <div className="my-3 rounded-2xl bg-gray-50 border border-gray-200 overflow-hidden">
             <div className="flex items-center justify-between px-4 py-2 text-xs text-gray-500">
-              <span>{match[1]}</span>
+              <span>{language}</span>
               <button
-                onClick={() => handleCopy(String(children).replace(/\n$/, ''), `code-${Date.now()}`)}
+                onClick={() => handleCopy(code, `code-${Date.now()}`)}
                 className="flex items-center gap-1 text-gray-500 hover:text-gray-700"
               >
                 <Copy size={14} />
@@ -166,7 +233,7 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
             <div className="px-4 pb-4">
               <SyntaxHighlighter
                 style={a11yOneLight}
-                language={match[1]}
+                language={language}
                 PreTag="div"
                 codeTagProps={{
                   style: {
@@ -186,7 +253,7 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
                 }}
                 {...props}
               >
-                {String(children).replace(/\n$/, '')}
+                {code}
               </SyntaxHighlighter>
             </div>
           </div>

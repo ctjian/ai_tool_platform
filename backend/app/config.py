@@ -50,7 +50,7 @@ class Settings(BaseSettings):
 
     # 论文解析（arXiv + GROBID）
     GROBID_URL: str = "https://lfoppiano-grobid.hf.space"
-    PAPER_DATA_DIR: str = str(Path(__file__).resolve().parents[1] / "data" / "papers")
+    PAPER_DATA_DIR: str = str(Path(__file__).resolve().parents[1] / "data" / "chat" / "papers")
     ARXIV_MAX_ACTIVE_PAPERS: int = 3
     ARXIV_CONTEXT_TOP_K: int = 8
     ARXIV_CONTEXT_MAX_TOKENS: int = 4000
