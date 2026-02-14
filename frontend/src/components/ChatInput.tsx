@@ -82,34 +82,67 @@ function ChatInput({
     const items = e.clipboardData?.items
     if (!items) return
     let nextImages = [...images]
+    let nextPdfFiles = [...pdfFiles]
+    let hasFilePaste = false
     let changed = false
+    let pdfChanged = false
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i]
-      if (item.type.indexOf('image') === -1) continue
-      e.preventDefault()
+      if (item.kind !== 'file') continue
       const file = item.getAsFile()
       if (!file) continue
-      if (nextImages.length >= 5) {
-        alert('最多只能上传5张图片')
-        break
-      }
-      if (!file.type.startsWith('image/')) continue
-      if (file.size > 10 * 1024 * 1024) {
-        alert('图片大小不能超过 10MB')
+      const itemType = (item.type || '').toLowerCase()
+      const isImage = file.type.startsWith('image/') || itemType.startsWith('image/')
+      const isPdf = isPdfFile(file) || itemType.includes('pdf')
+      if (!isImage && !isPdf) continue
+      hasFilePaste = true
+
+      if (isImage) {
+        if (nextImages.length >= 5) {
+          alert('最多只能上传5张图片')
+          continue
+        }
+        if (file.size > 10 * 1024 * 1024) {
+          alert('图片大小不能超过 10MB')
+          continue
+        }
+        const preview = URL.createObjectURL(file)
+        nextImages.push({
+          file,
+          preview,
+          id: Date.now().toString() + Math.random()
+        })
+        changed = true
         continue
       }
-      const preview = URL.createObjectURL(file)
-      nextImages.push({
+
+      if (nextPdfFiles.length >= 5) {
+        alert('单次最多上传5个PDF')
+        continue
+      }
+      if (file.size > 20 * 1024 * 1024) {
+        alert('PDF大小不能超过20MB')
+        continue
+      }
+      nextPdfFiles.push({
         file,
-        preview,
-        id: Date.now().toString() + Math.random()
+        id: Date.now().toString() + Math.random(),
+        name: file.name || 'uploaded.pdf',
+        size: file.size,
       })
-      changed = true
+      pdfChanged = true
+    }
+
+    if (hasFilePaste) {
+      e.preventDefault()
     }
 
     if (changed) {
       onImagesChange?.(nextImages)
+    }
+    if (pdfChanged) {
+      onPdfFilesChange?.(nextPdfFiles)
     }
   }
 
