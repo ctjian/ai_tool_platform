@@ -216,6 +216,15 @@ async def generate_chat_stream(
 
         arxiv_context = None
         if active_targets:
+            history_user_queries = [
+                str(msg.content or "").strip()
+                for msg in messages_history
+                if msg.role == "user" and str(msg.content or "").strip()
+            ]
+            rewrite_api_config = {
+                "api_key": str(getattr(api_config, "api_key", "") or ""),
+                "base_url": str(getattr(api_config, "base_url", "") or ""),
+            }
             progress_queue: asyncio.Queue[Dict] = asyncio.Queue()
             loop = asyncio.get_running_loop()
 
@@ -229,6 +238,8 @@ async def generate_chat_stream(
                     active_targets,
                     settings,
                     progress_reporter,
+                    history_user_queries,
+                    rewrite_api_config,
                 )
             )
             try:

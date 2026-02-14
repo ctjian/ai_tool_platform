@@ -1,5 +1,5 @@
 import { useAppStore } from '../store/app'
-import { Settings, Compass, Plus, MoreHorizontal, Pencil, Trash2, Wrench, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { Settings, Compass, PenSquare, MoreHorizontal, Pencil, Trash2, Wrench, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import apiClient from '../api/client'
 import { addToast } from './ui'
 import { useState } from 'react'
@@ -191,7 +191,7 @@ function Sidebar({ onPageChange, currentPage = 'chat' }: SidebarProps) {
           className={`w-full flex items-center ${collapsed ? 'justify-center' : 'justify-center gap-2'} px-3 py-2 ${collapsed ? '' : 'border border-gray-300'} text-gray-700 hover:bg-gray-100 active:bg-gray-200 rounded-lg transition text-sm`}
           title="新建聊天"
         >
-          <Plus size={16} />
+          <PenSquare size={16} />
           {!collapsed && '新建聊天'}
         </button>
       </div>

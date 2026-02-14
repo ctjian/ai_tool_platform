@@ -342,6 +342,7 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
                   'chunk_paper',
                   'paper_ready',
                   'embed_chunks',
+                  'query_rewrite',
                   'retrieve_chunks',
                   'retrieval_ready',
                 ].includes(key)

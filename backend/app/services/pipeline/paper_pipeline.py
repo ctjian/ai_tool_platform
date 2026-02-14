@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import logging
 import json
 import time
+import httpx
 
 from app.services.cache.paper_store import (
     build_paper_paths,
@@ -131,6 +132,124 @@ def _build_embedding_client(settings) -> EmbeddingClient:
         model=settings.EMBEDDING_MODEL,
         timeout_sec=settings.EMBEDDING_TIMEOUT_SEC,
     )
+
+
+def _strip_arxiv_refs_from_query(text: str) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+    detected = extract_arxiv_targets(cleaned)
+    if detected:
+        cleaned = remove_detected_arxiv_references(cleaned, detected)
+    return " ".join(cleaned.split())
+
+
+def _truncate_chars(text: str, limit: int) -> str:
+    value = (text or "").strip()
+    max_chars = max(1, int(limit))
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 1].rstrip() + "…"
+
+
+def _normalize_rewrite_output(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    # 防御模型输出多行/前缀标签，统一压平为单行检索串。
+    normalized = " ".join(raw.replace("\r", "\n").split())
+    lowered = normalized.lower()
+    for prefix in ("query:", "rewritten query:", "rewritten_query:"):
+        if lowered.startswith(prefix):
+            normalized = normalized[len(prefix) :].strip()
+            break
+    return normalized.strip("`\"' ")
+
+
+def _rewrite_query_with_llm(
+    *,
+    base_query: str,
+    history_queries: List[str],
+    paper_profiles: List[Dict[str, str]],
+    settings,
+    rewrite_api_config: Optional[Dict[str, str]] = None,
+) -> str:
+    model = str(getattr(settings, "ARXIV_QUERY_REWRITE_MODEL", "") or "gpt-4o-mini").strip()
+    api_key = str((rewrite_api_config or {}).get("api_key") or settings.OPENAI_API_KEY or "").strip()
+    base_url = str(
+        (rewrite_api_config or {}).get("base_url")
+        or settings.OPENAI_BASE_URL
+        or "https://api.openai.com/v1"
+    ).rstrip("/")
+
+    if not api_key:
+        raise RuntimeError("query rewrite skipped: missing API key")
+
+    history_lines = []
+    for idx, item in enumerate(history_queries, start=1):
+        history_lines.append(f"{idx}. {item}")
+    history_block = "\n".join(history_lines) if history_lines else "- (none)"
+
+    paper_lines = []
+    for idx, paper in enumerate(paper_profiles, start=1):
+        pid = str(paper.get("paper_id") or "")
+        title = str(paper.get("title") or "").strip() or "Untitled"
+        abstract = str(paper.get("abstract") or "").strip() or "(abstract unavailable)"
+        paper_lines.append(f"[{idx}] arXiv:{pid}\nTitle: {title}\nAbstract: {abstract}")
+    papers_block = "\n\n".join(paper_lines) if paper_lines else "- (none)"
+
+    system_prompt = (
+        "你是论文检索查询重写器。"
+        "你的输出只用于向量检索，不会展示给用户。\n"
+        "目标：最大化召回与用户问题最相关的论文段落。\n"
+        "规则：\n"
+        "- 结合当前问题与最近多轮问题理解检索意图。\n"
+        "- 优先使用论文标题/摘要里的任务、方法、模块、损失、数据集、指标术语。\n"
+        "- 保留用户约束（比较对象、实验设置、失败案例、公式或实现细节）。\n"
+        "- 不要回答问题，不要解释，不要编造事实。\n"
+        "- 仅输出一行检索查询文本。"
+    )
+    user_prompt = (
+        f"CURRENT_QUERY:\n{base_query}\n\n"
+        f"HISTORY_USER_QUERIES:\n{history_block}\n\n"
+        f"ACTIVE_PAPERS:\n{papers_block}"
+    )
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.1,
+        "max_tokens": 220,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    url = f"{base_url}/chat/completions"
+
+    timeout_sec = int(getattr(settings, "ARXIV_QUERY_REWRITE_TIMEOUT_SEC", 30) or 30)
+    with httpx.Client(timeout=max(5, timeout_sec)) as client:
+        resp = client.post(url, json=payload, headers=headers)
+
+    if resp.status_code >= 400:
+        detail = (resp.text or "")[:240]
+        raise RuntimeError(f"query rewrite http {resp.status_code}: {detail}")
+
+    body = resp.json()
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise RuntimeError("query rewrite returned empty choices")
+
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    content = ""
+    if isinstance(message, dict):
+        content = str(message.get("content") or "")
+    rewritten = _normalize_rewrite_output(content)
+    if not rewritten:
+        raise RuntimeError("query rewrite returned empty content")
+    return rewritten
 
 
 def _ensure_chunk_embedding_map(
@@ -452,26 +571,40 @@ def _prepare_parsed_files(
     save_meta(paths, meta)
 
 
-def _read_paper_title(paths) -> str:
+def _read_paper_title_and_abstract(paths) -> Tuple[str, str]:
     if not paths.markdown_path.exists():
-        return ""
+        return "", ""
+    title = ""
+    abstract_lines: List[str] = []
+    in_abstract = False
     try:
         with paths.markdown_path.open("r", encoding="utf-8") as f:
-            for _ in range(24):
-                line = f.readline()
-                if not line:
-                    break
+            for line in f:
                 stripped = line.strip()
-                if stripped.startswith("# "):
-                    return stripped[2:].strip()
+                if not stripped:
+                    if in_abstract:
+                        abstract_lines.append("")
+                    continue
+                if not title and stripped.startswith("# "):
+                    title = stripped[2:].strip()
+                    continue
+                if stripped.lower().startswith("## abstract"):
+                    in_abstract = True
+                    continue
+                if in_abstract and stripped.startswith("#"):
+                    break
+                if in_abstract:
+                    abstract_lines.append(stripped)
     except Exception:
-        return ""
-    return ""
+        return "", ""
+    abstract = " ".join(line for line in abstract_lines if line).strip()
+    abstract = " ".join(abstract.split())
+    return title, abstract
 
 
 def _build_paper_descriptor(target: ArxivTarget, paths) -> Dict:
     meta = load_meta(paths) or {}
-    title = _read_paper_title(paths)
+    title, abstract = _read_paper_title_and_abstract(paths)
     safe_id = target.safe_id
     filename = f"{safe_id}.pdf"
     return {
@@ -481,6 +614,7 @@ def _build_paper_descriptor(target: ArxivTarget, paths) -> Dict:
         "filename": filename,
         "pdf_url": f"/papers/{safe_id}/{filename}",
         "title": title,
+        "abstract": abstract,
         "meta_updated_at": meta.get("updated_at"),
     }
 
@@ -608,6 +742,8 @@ def build_arxiv_context_for_targets(
     targets: List[ArxivTarget],
     settings,
     progress_callback: ProgressCallback = None,
+    history_user_queries: Optional[List[str]] = None,
+    rewrite_api_config: Optional[Dict[str, str]] = None,
 ) -> Optional[ArxivContextPayload]:
     """
     Build merged retrieval context from one or many arXiv targets.
@@ -626,22 +762,25 @@ def build_arxiv_context_for_targets(
         message=f"识别到 arXiv 论文 {len(unique_targets)} 篇",
     )
 
-    query_text = remove_detected_arxiv_references(message, unique_targets).strip() or _default_query()
+    base_query = remove_detected_arxiv_references(message, unique_targets).strip() or _default_query()
+    query_text = base_query
+
+    history_turns = max(0, int(getattr(settings, "ARXIV_QUERY_REWRITE_HISTORY_TURNS", 3) or 3))
+    history_cleaned: List[str] = []
+    for item in history_user_queries or []:
+        normalized = _strip_arxiv_refs_from_query(str(item or ""))
+        if not normalized:
+            continue
+        history_cleaned.append(normalized)
+
     logger.info(
-        "arxiv-query-normalized papers=%s query=%s",
+        "arxiv-query-base papers=%s query=%s",
         ",".join(t.paper_id for t in unique_targets),
-        query_text[:180],
+        base_query[:180],
     )
 
-    try:
-        embedding_client = _build_embedding_client(settings)
-        query_embedding = embedding_client.embed_texts([query_text])[0]
-    except (EmbeddingConfigError, EmbeddingServiceError) as exc:
-        raise ArxivPipelineError(f"Embedding 检索失败: {exc}") from exc
-
-    merged_ranked: List[Dict] = []
-    paper_debug: List[Dict] = []
     papers: List[Dict] = []
+    prepared_papers: List[Tuple[ArxivTarget, List[Dict], Dict, Any]] = []
 
     for target in unique_targets:
         logger.info(
@@ -665,6 +804,80 @@ def build_arxiv_context_for_targets(
                 filename=paper_desc.get("filename") or "",
             )
         papers.append(paper_desc)
+        prepared_papers.append((target, chunks, paper_desc, paths))
+
+    abstract_limit = max(200, int(getattr(settings, "ARXIV_QUERY_REWRITE_ABSTRACT_CHARS", 1200) or 1200))
+    rewrite_profiles: List[Dict[str, str]] = []
+    for paper in papers:
+        rewrite_profiles.append(
+            {
+                "paper_id": str(paper.get("paper_id") or ""),
+                "title": str(paper.get("title") or ""),
+                "abstract": _truncate_chars(str(paper.get("abstract") or ""), abstract_limit),
+            }
+        )
+
+    rewrite_started = time.perf_counter()
+    _emit_progress(
+        progress_callback,
+        key="query_rewrite",
+        status="running",
+        message="正在改写检索查询",
+    )
+    rewrite_applied = False
+    rewrite_error = ""
+    history_for_rewrite = history_cleaned[-history_turns:] if history_turns > 0 else []
+    history_for_rewrite = [q for q in history_for_rewrite if q != base_query]
+
+    try:
+        rewritten = _rewrite_query_with_llm(
+            base_query=base_query,
+            history_queries=history_for_rewrite,
+            paper_profiles=rewrite_profiles,
+            settings=settings,
+            rewrite_api_config=rewrite_api_config,
+        )
+        if rewritten:
+            query_text = f"{base_query}\n{rewritten}"
+            rewrite_applied = rewritten != base_query
+    except Exception as exc:
+        rewrite_error = str(exc)
+        query_text = base_query
+        logger.warning(
+            "arxiv-query-rewrite-fallback reason=%s papers=%s",
+            rewrite_error[:300],
+            ",".join(t.paper_id for t in unique_targets),
+        )
+
+    rewrite_msg = (
+        "检索查询改写完成"
+        if rewrite_applied
+        else ("查询改写失败，回退原查询" if rewrite_error else "检索查询保持原始表达")
+    )
+    _emit_progress(
+        progress_callback,
+        key="query_rewrite",
+        status="done",
+        message=rewrite_msg,
+        elapsed_ms=int((time.perf_counter() - rewrite_started) * 1000),
+    )
+    logger.info(
+        "arxiv-query-rewrite-result papers=%s rewritten=%s base=%s final=%s",
+        ",".join(t.paper_id for t in unique_targets),
+        rewrite_applied,
+        base_query[:180],
+        query_text[:180],
+    )
+
+    try:
+        embedding_client = _build_embedding_client(settings)
+        query_embedding = embedding_client.embed_texts([query_text])[0]
+    except (EmbeddingConfigError, EmbeddingServiceError) as exc:
+        raise ArxivPipelineError(f"Embedding 检索失败: {exc}") from exc
+
+    merged_ranked: List[Dict] = []
+    paper_debug: List[Dict] = []
+    for target, chunks, paper_desc, paths in prepared_papers:
         ranked_items, ranked_debug = _build_ranked_chunks_for_paper(
             target=target,
             paper_chunks=chunks,
@@ -724,20 +937,34 @@ def build_arxiv_context_for_targets(
         }
         for i, item in enumerate(merged_ranked[: max(8, settings.ARXIV_CONTEXT_TOP_K)])
     ]
+    papers_public = [
+        {
+            "paper_id": str(p.get("paper_id") or ""),
+            "canonical_id": str(p.get("canonical_id") or ""),
+            "safe_id": str(p.get("safe_id") or ""),
+            "filename": str(p.get("filename") or ""),
+            "pdf_url": str(p.get("pdf_url") or ""),
+            "title": str(p.get("title") or ""),
+            "meta_updated_at": p.get("meta_updated_at"),
+        }
+        for p in papers
+    ]
 
     return ArxivContextPayload(
         targets=unique_targets,
-        papers=papers,
+        papers=papers_public,
         query_text=query_text,
         context_text=context_text,
-        context_prompt=_build_context_prompt(papers, context_text),
+        context_prompt=_build_context_prompt(papers_public, context_text),
         retrieval_meta={
             "query": query_text,
-            "paper_count": len(papers),
-            "papers": papers,
+            "query_base": base_query,
+            "query_rewritten": rewrite_applied,
+            "query_rewrite_model": str(getattr(settings, "ARXIV_QUERY_REWRITE_MODEL", "") or "gpt-4o-mini"),
+            "paper_count": len(papers_public),
+            "papers": papers_public,
             "per_paper": paper_debug,
             "items": retrieval_items,
             "context_max_tokens": int(settings.ARXIV_CONTEXT_MAX_TOKENS),
         },
     )
-
