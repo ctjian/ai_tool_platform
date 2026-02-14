@@ -5,6 +5,8 @@ import {
   Conversation,
   ChatRequest,
   ConversationPapersState,
+  NotebookNote,
+  NotebookQaRequest,
   ArxivTranslateCreateRequest,
   ArxivTranslateJob,
   ArxivTranslateHistoryResponse,
@@ -85,6 +87,45 @@ export const apiClient = {
       `/conversations/${conversationId}/papers/delete`,
       { canonical_id: canonicalId }
     ),
+
+  // Notebook 相关
+  listNotebookNotes: () =>
+    api.get<{ notes: NotebookNote[] }>('/notebook/notes'),
+  createNotebookNote: (payload: {
+    title: string
+    summary?: string
+    tags: string[]
+    content: string
+  }) =>
+    api.post<NotebookNote>('/notebook/notes', payload),
+  notebookQaStream: async (payload: NotebookQaRequest, signal?: AbortSignal) => {
+    const response = await fetch(`${API_BASE}/notebook/qa/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      signal,
+    })
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`
+      try {
+        const data = await response.json()
+        if (data?.detail) {
+          detail = String(data.detail)
+        }
+      } catch {
+        try {
+          const text = await response.text()
+          if (text) detail = text
+        } catch {
+          // ignore
+        }
+      }
+      throw new Error(detail)
+    }
+    return response
+  },
   
   // 聊天相关 - 使用fetch处理SSE流式响应
   chat: async (data: ChatRequest, signal?: AbortSignal) => {

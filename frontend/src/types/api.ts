@@ -66,6 +66,32 @@ export interface ConversationPapersState {
   papers: ConversationPaperItem[]
 }
 
+export interface NotebookNote {
+  id: string
+  title: string
+  path: string
+  tags: string[]
+  updated_at?: string
+  summary?: string
+}
+
+export interface NotebookSourceHit {
+  source_id: string
+  note_id: string
+  title: string
+  path: string
+  tags: string[]
+  snippet: string
+  score: number
+}
+
+export interface NotebookQaRequest {
+  query: string
+  model?: string
+  api_key?: string
+  base_url?: string
+}
+
 export interface ArxivTranslateCreateRequest {
   input_text: string
   api_key?: string

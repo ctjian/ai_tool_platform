@@ -1,13 +1,13 @@
 import { useAppStore } from '../store/app'
-import { Settings, Compass, PenSquare, MoreHorizontal, Pencil, Trash2, Wrench, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { Settings, Compass, PenSquare, MoreHorizontal, Pencil, Trash2, Wrench, PanelLeftClose, PanelLeftOpen, NotebookTabs } from 'lucide-react'
 import apiClient from '../api/client'
 import { addToast } from './ui'
 import { useState } from 'react'
 import openaiLogo from '../assets/chatgpt.svg'
 
 interface SidebarProps {
-  onPageChange?: (page: 'chat' | 'settings' | 'explorer' | 'custom-tools') => void
-  currentPage?: 'chat' | 'settings' | 'explorer' | 'custom-tools'
+  onPageChange?: (page: 'chat' | 'settings' | 'explorer' | 'custom-tools' | 'notebook') => void
+  currentPage?: 'chat' | 'settings' | 'explorer' | 'custom-tools' | 'notebook'
 }
 
 // 获取对话分组
@@ -317,6 +317,18 @@ function Sidebar({ onPageChange, currentPage = 'chat' }: SidebarProps) {
         >
           <Wrench size={16} />
           {!collapsed && '自定义工具'}
+        </button>
+        <button
+          onClick={() => onPageChange?.('notebook')}
+          className={`w-full flex items-center ${collapsed ? 'justify-center' : 'gap-2'} px-3 py-2 rounded transition text-sm ${
+            currentPage === 'notebook'
+              ? 'bg-gray-200 text-gray-900'
+              : 'text-gray-700 hover:bg-gray-100 active:bg-gray-200'
+          }`}
+          title="AI笔记本"
+        >
+          <NotebookTabs size={16} />
+          {!collapsed && 'AI笔记本'}
         </button>
         <button
           onClick={() => onPageChange?.('settings')}

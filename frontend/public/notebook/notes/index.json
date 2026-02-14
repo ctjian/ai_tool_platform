@@ -1,0 +1,27 @@
+[
+  {
+    "id": "linux-journal-vacuum",
+    "title": "Ubuntu 日志暴涨排查：journalctl 占满磁盘",
+    "path": "/notebook/notes/linux-journal-vacuum.md",
+    "tags": ["系统运维"],
+    "updated_at": "2026-02-14",
+    "summary": "定位 /var/log/journal 占用异常并通过 Systemd 配额控制日志增长。"
+  },
+  {
+    "id": "ssh-handshake-timeout",
+    "title": "SSH 连接偶发超时：握手阶段排错路径",
+    "path": "/notebook/notes/ssh-handshake-timeout.md",
+    "tags": ["系统运维", "开发排错"],
+    "updated_at": "2026-02-10",
+    "summary": "从 DNS、MTU、防火墙和 tcpdump 角度定位握手卡住问题。"
+  },
+  {
+    "id": "python-segfault-c-extension",
+    "title": "Python 进程随机崩溃：C 扩展段错误复盘",
+    "path": "/notebook/notes/python-segfault-c-extension.md",
+    "tags": ["开发排错"],
+    "updated_at": "2026-02-08",
+    "summary": "通过 core dump + gdb + addr2line 反查崩溃符号并修复越界写。"
+  }
+]
+

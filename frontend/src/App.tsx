@@ -7,6 +7,7 @@ import { ToastContainer } from './components/ui'
 import { SettingsPage } from './pages/SettingsPage'
 import { ToolsExplorer } from './pages/ToolsExplorer'
 import { CustomToolsPage } from './pages/CustomToolsPage'
+import { AiNotebookPage } from './pages/AiNotebookPage'
 
 function App() {
   const { 
@@ -25,7 +26,7 @@ function App() {
     setAvailableModelGroups,
   } = useAppStore()
 
-  const [currentPage, setCurrentPage] = useState<'chat' | 'settings' | 'explorer' | 'custom-tools'>('chat')
+  const [currentPage, setCurrentPage] = useState<'chat' | 'settings' | 'explorer' | 'custom-tools' | 'notebook'>('chat')
 
   useEffect(() => {
     const loadInitialData = async () => {
@@ -96,10 +97,10 @@ function App() {
     loadInitialData()
   }, [setCategories, setTools, setConversations, setLoading, setCurrentConversation, setCurrentTool])
 
-  const handlePageChange = (page: 'chat' | 'settings' | 'explorer' | 'custom-tools') => {
+  const handlePageChange = (page: 'chat' | 'settings' | 'explorer' | 'custom-tools' | 'notebook') => {
     setCurrentPage(page)
     // 切换到设置、提示词广场或自定义工具时，清除当前工具和对话以显示对应页面
-    if (page === 'settings' || page === 'explorer' || page === 'custom-tools') {
+    if (page === 'settings' || page === 'explorer' || page === 'custom-tools' || page === 'notebook') {
       setCurrentTool(null)
       setCurrentConversation(null)
     }
@@ -136,6 +137,14 @@ function App() {
       return (
         <div className="flex-1 overflow-y-auto bg-white p-6">
           <CustomToolsPage />
+        </div>
+      )
+    }
+
+    if (currentPage === 'notebook') {
+      return (
+        <div className="flex-1 overflow-y-auto bg-white p-6">
+          <AiNotebookPage />
         </div>
       )
     }

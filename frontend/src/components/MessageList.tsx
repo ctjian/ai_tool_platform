@@ -1,18 +1,12 @@
 // Review note:
 // - 当消息处于 __waiting__ 阶段时，读取 message.extra.status_steps 渲染论文检索进度列表。
 // - 每个步骤显示运行/完成/失败状态，完成时展示耗时（秒）。
-import React, { forwardRef, useEffect, useMemo, useState } from 'react'
+import React, { forwardRef, useMemo, useState } from 'react'
 import { Message } from '../types/api'
 import { useAppStore } from '../store/app'
-import ReactMarkdown from 'react-markdown'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import a11yOneLight from 'react-syntax-highlighter/dist/esm/styles/prism/a11y-one-light'
-import remarkGfm from 'remark-gfm'
-import remarkMath from 'remark-math'
-import rehypeKatex from 'rehype-katex'
 import { Copy, Check, RotateCcw, ChevronLeft, ChevronRight, Loader2, AlertCircle, Pencil, X } from 'lucide-react'
 import { addToast } from './ui'
-import 'katex/dist/katex.min.css'
+import MarkdownRenderer from './MarkdownRenderer'
 
 interface MessageListProps {
   messages: Message[]
@@ -22,68 +16,6 @@ interface MessageListProps {
     assistantMessageId: string
     content: string
   }) => Promise<void> | void
-}
-
-let mermaidInitialized = false
-
-const MermaidBlock: React.FC<{ chart: string }> = ({ chart }) => {
-  const [svg, setSvg] = useState('')
-  const [renderError, setRenderError] = useState('')
-
-  useEffect(() => {
-    let cancelled = false
-    const render = async () => {
-      try {
-        const mermaid = (await import('mermaid')).default
-        if (!mermaidInitialized) {
-          mermaid.initialize({
-            startOnLoad: false,
-            securityLevel: 'loose',
-            theme: 'default',
-          })
-          mermaidInitialized = true
-        }
-        const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-        const result = await mermaid.render(id, chart)
-        if (!cancelled) {
-          setSvg(result.svg)
-          setRenderError('')
-        }
-      } catch (error: any) {
-        if (!cancelled) {
-          setSvg('')
-          setRenderError(error?.message || 'Mermaid 渲染失败')
-        }
-      }
-    }
-    render()
-    return () => {
-      cancelled = true
-    }
-  }, [chart])
-
-  if (renderError) {
-    return (
-      <div className="my-3 rounded-2xl bg-red-50 border border-red-200 overflow-hidden">
-        <div className="px-4 py-2 text-xs text-red-700 border-b border-red-200">Mermaid 渲染失败，已回退源码</div>
-        <pre className="px-4 py-3 text-xs text-red-700 whitespace-pre-wrap break-words">{chart}</pre>
-      </div>
-    )
-  }
-
-  if (!svg) {
-    return (
-      <div className="my-3 rounded-2xl bg-gray-50 border border-gray-200 px-4 py-3 text-sm text-gray-600">
-        正在渲染 Mermaid 图...
-      </div>
-    )
-  }
-
-  return (
-    <div className="my-3 rounded-2xl bg-gray-50 border border-gray-200 overflow-auto px-3 py-3">
-      <div className="[&>svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svg }} />
-    </div>
-  )
 }
 
 const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
@@ -117,15 +49,6 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
       } catch (e) {
         addToast('复制失败，请手动复制', 'error')
       }
-    }
-
-    // 将 \(...\) 转换为 $...$ 和 \[...\] 转换为 $$...$$
-    const convertLatexDelimiters = (content: string): string => {
-      // 转换 \[...\] 为 $$...$$（块级）
-      content = content.replace(/\\\[([\s\S]*?)\\\]/g, (_match, p1) => `$$${p1}$$`)
-      // 转换 \(...\) 为 $...$ （内联）
-      content = content.replace(/\\\(([\s\S]*?)\\\)/g, (_match, p1) => `$${p1}$`)
-      return content
     }
 
     // 获取消息的显示内容（考虑版本选择）
@@ -183,119 +106,6 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
         return versions.length > 0 ? versions.length + 1 : 0 // 当前版本 + 所有重试版本
       }
       return 0
-    }
-
-    const markdownComponents = {
-      h1: ({ children }: any) => (
-        <h1 className="text-2xl font-semibold mt-4 mb-2">{children}</h1>
-      ),
-      h2: ({ children }: any) => (
-        <h2 className="text-xl font-semibold mt-4 mb-2">{children}</h2>
-      ),
-      h3: ({ children }: any) => (
-        <h3 className="text-lg font-semibold mt-3 mb-2">{children}</h3>
-      ),
-      h4: ({ children }: any) => (
-        <h4 className="text-base font-semibold mt-3 mb-2">{children}</h4>
-      ),
-      p: ({ children }: any) => (
-        <p className="my-2 leading-relaxed">{children}</p>
-      ),
-      ul: ({ children }: any) => (
-        <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>
-      ),
-      ol: ({ children }: any) => (
-        <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>
-      ),
-      li: ({ children }: any) => (
-        <li className="leading-relaxed">{children}</li>
-      ),
-      strong: ({ children }: any) => (
-        <strong className="font-semibold">{children}</strong>
-      ),
-      hr: () => <hr className="my-4 border-gray-200" />,
-      blockquote: ({ children }: any) => (
-        <blockquote className="border-l-4 border-gray-200 pl-3 my-2 text-gray-700">
-          {children}
-        </blockquote>
-      ),
-      code: ({ inline, className, children, ...props }: any) => {
-        const match = /language-([\w-]+)/.exec(className || '')
-        const language = (match?.[1] || '').toLowerCase()
-        const code = String(children).replace(/\n$/, '')
-        if (!inline && language === 'mermaid') {
-          return <MermaidBlock chart={code} />
-        }
-        return !inline && match ? (
-          <div className="my-3 rounded-2xl bg-gray-50 border border-gray-200 overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-2 text-xs text-gray-500">
-              <span>{language}</span>
-              <button
-                onClick={() => handleCopy(code, `code-${Date.now()}`)}
-                className="flex items-center gap-1 text-gray-500 hover:text-gray-700"
-              >
-                <Copy size={14} />
-                复制代码
-              </button>
-            </div>
-            <div className="px-4 pb-4">
-              <SyntaxHighlighter
-                style={a11yOneLight}
-                language={language}
-                PreTag="div"
-                codeTagProps={{
-                  style: {
-                    background: 'transparent',
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
-                  },
-                }}
-                wrapLongLines
-                customStyle={{
-                  background: 'transparent',
-                  margin: 0,
-                  padding: 0,
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  overflowX: 'visible',
-                }}
-                {...props}
-              >
-                {code}
-              </SyntaxHighlighter>
-            </div>
-          </div>
-        ) : (
-          <code
-            className="bg-gray-100 px-1.5 py-0.5 rounded text-red-600 font-mono text-sm"
-            {...props}
-          >
-            {children}
-          </code>
-        )
-      },
-      table: ({ children }: any) => (
-        <div className="my-3 overflow-x-auto">
-          <table className="min-w-full border border-gray-200 rounded-lg overflow-hidden text-sm">
-            {children}
-          </table>
-        </div>
-      ),
-      thead: ({ children }: any) => (
-        <thead className="bg-gray-50 text-gray-700">{children}</thead>
-      ),
-      tbody: ({ children }: any) => (
-        <tbody className="divide-y divide-gray-200">{children}</tbody>
-      ),
-      tr: ({ children }: any) => (
-        <tr className="hover:bg-gray-50">{children}</tr>
-      ),
-      th: ({ children }: any) => (
-        <th className="text-left font-semibold px-4 py-2 border-b border-gray-200">{children}</th>
-      ),
-      td: ({ children }: any) => (
-        <td className="px-4 py-2 border-b border-gray-200 text-gray-800">{children}</td>
-      ),
     }
 
     const visibleMessages = useMemo(
@@ -507,25 +317,13 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
                             </summary>
                             {hasThinking && (
                               <div className="mt-2 rounded-md border-l-4 border-gray-200 bg-gray-50 px-3 py-2 text-gray-700">
-                                <ReactMarkdown
-                                  remarkPlugins={[remarkGfm, remarkMath]}
-                                  rehypePlugins={[rehypeKatex]}
-                                  components={markdownComponents}
-                                >
-                                  {convertLatexDelimiters(msg.thinking || '')}
-                                </ReactMarkdown>
+                                <MarkdownRenderer content={msg.thinking || ''} preset="chat" normalizeLatexDelimiters />
                               </div>
                             )}
                           </details>
                         )}
                         {!isWaiting && (
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm, remarkMath]}
-                            rehypePlugins={[rehypeKatex]}
-                            components={markdownComponents}
-                          >
-                            {convertLatexDelimiters(displayContent)}
-                          </ReactMarkdown>
+                          <MarkdownRenderer content={displayContent} preset="chat" normalizeLatexDelimiters />
                         )}
                         {isWaiting && (
                           <div className="mt-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 shadow-sm">

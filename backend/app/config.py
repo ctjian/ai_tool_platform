@@ -71,6 +71,12 @@ class Settings(BaseSettings):
     EMBEDDING_TIMEOUT_SEC: int = 60
     EMBEDDING_BATCH_SIZE: int = 16
 
+    # AI Notebook（Markdown 笔记 + 向量检索）
+    NOTEBOOK_DATA_DIR: str = str(Path(__file__).resolve().parents[1] / "data" / "notebook" / "notes")
+    NOTEBOOK_CONTEXT_MAX_TOKENS: int = 3200
+    NOTEBOOK_MAX_NOTES_PER_QUERY: int = 4
+    NOTEBOOK_MAX_CHUNKS_PER_NOTE: int = 3
+
     # 自定义工具：arXiv LaTeX 精细翻译
     CUSTOM_TOOLS_DATA_DIR: str = str(Path(__file__).resolve().parents[1] / "data" / "custom_tools")
     ARXIV_TRANSLATE_DATA_DIR: str = str(
