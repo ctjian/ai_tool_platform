@@ -193,6 +193,7 @@ async def generate_chat_stream(
                     "safe_id": t.safe_id,
                     "filename": f"{t.safe_id}.pdf",
                     "pdf_url": f"/papers/{t.safe_id}/{t.safe_id}.pdf",
+                    "source_type": "arxiv",
                 }
                 for t in detected_targets
             ]

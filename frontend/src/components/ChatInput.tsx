@@ -1,10 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Send, Plus, X, Square } from 'lucide-react'
+import { Send, Plus, X, Square, FileText } from 'lucide-react'
 
 interface ImageFile {
   file: File
   preview: string
   id: string
+}
+
+interface PdfFile {
+  file: File
+  id: string
+  name: string
+  size: number
 }
 
 interface ChatInputProps {
@@ -16,6 +23,8 @@ interface ChatInputProps {
   loading?: boolean
   images?: ImageFile[]
   onImagesChange?: (images: ImageFile[]) => void
+  pdfFiles?: PdfFile[]
+  onPdfFilesChange?: (pdfFiles: PdfFile[]) => void
 }
 
 function ChatInput({
@@ -27,6 +36,8 @@ function ChatInput({
   loading = false,
   images = [],
   onImagesChange,
+  pdfFiles = [],
+  onPdfFilesChange,
 }: ChatInputProps) {
   const containerShadowClass = loading ? 'shadow-none' : 'shadow-sm'
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -70,29 +81,88 @@ function ChatInput({
   const handlePaste = (e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items
     if (!items) return
+    let nextImages = [...images]
+    let changed = false
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i]
-      if (item.type.indexOf('image') !== -1) {
-        e.preventDefault()
-        const file = item.getAsFile()
-        if (file) {
-          addImageFile(file)
-        }
+      if (item.type.indexOf('image') === -1) continue
+      e.preventDefault()
+      const file = item.getAsFile()
+      if (!file) continue
+      if (nextImages.length >= 5) {
+        alert('最多只能上传5张图片')
+        break
       }
+      if (!file.type.startsWith('image/')) continue
+      if (file.size > 10 * 1024 * 1024) {
+        alert('图片大小不能超过 10MB')
+        continue
+      }
+      const preview = URL.createObjectURL(file)
+      nextImages.push({
+        file,
+        preview,
+        id: Date.now().toString() + Math.random()
+      })
+      changed = true
+    }
+
+    if (changed) {
+      onImagesChange?.(nextImages)
     }
   }
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files) return
+    let nextImages = [...images]
+    let nextPdfFiles = [...pdfFiles]
+    let imageChanged = false
+    let pdfChanged = false
 
     for (let i = 0; i < files.length; i++) {
-      if (images.length >= 5) {
-        alert('最多只能上传5张图片')
-        break
+      const file = files[i]
+      if (file.type.startsWith('image/')) {
+        if (nextImages.length >= 5) {
+          alert('最多只能上传5张图片')
+          continue
+        }
+        if (file.size > 10 * 1024 * 1024) {
+          alert('图片大小不能超过 10MB')
+          continue
+        }
+        const preview = URL.createObjectURL(file)
+        nextImages.push({
+          file,
+          preview,
+          id: Date.now().toString() + Math.random()
+        })
+        imageChanged = true
+      } else if (isPdfFile(file)) {
+        if (nextPdfFiles.length >= 5) {
+          alert('单次最多上传5个PDF')
+          continue
+        }
+        if (file.size > 20 * 1024 * 1024) {
+          alert('PDF大小不能超过20MB')
+          continue
+        }
+        nextPdfFiles.push({
+          file,
+          id: Date.now().toString() + Math.random(),
+          name: file.name || 'uploaded.pdf',
+          size: file.size,
+        })
+        pdfChanged = true
       }
-      addImageFile(files[i])
+    }
+
+    if (imageChanged) {
+      onImagesChange?.(nextImages)
+    }
+    if (pdfChanged) {
+      onPdfFilesChange?.(nextPdfFiles)
     }
 
     // 清空 input 值，允许重复选择同一文件
@@ -101,36 +171,17 @@ function ChatInput({
     }
   }
 
-  const addImageFile = (file: File) => {
-    if (images.length >= 5) {
-      alert('最多只能上传5张图片')
-      return
-    }
-
-    // 检查文件类型
-    if (!file.type.startsWith('image/')) {
-      alert('只能上传图片文件')
-      return
-    }
-
-    // 检查文件大小 (最大 10MB)
-    if (file.size > 10 * 1024 * 1024) {
-      alert('图片大小不能超过 10MB')
-      return
-    }
-
-    const preview = URL.createObjectURL(file)
-    const newImage: ImageFile = {
-      file,
-      preview,
-      id: Date.now().toString() + Math.random()
-    }
-
-    onImagesChange?.([...images, newImage])
+  const isPdfFile = (file: File) => {
+    const lower = (file.name || '').toLowerCase()
+    return file.type === 'application/pdf' || lower.endsWith('.pdf')
   }
 
   const removeImage = (id: string) => {
     onImagesChange?.(images.filter(img => img.id !== id))
+  }
+
+  const removePdf = (id: string) => {
+    onPdfFilesChange?.(pdfFiles.filter((item) => item.id !== id))
   }
 
   return (
@@ -157,16 +208,38 @@ function ChatInput({
             ))}
           </div>
         )}
+        {pdfFiles.length > 0 && (
+          <div className="flex flex-wrap gap-2 p-3 pb-0">
+            {pdfFiles.map((item) => (
+              <div
+                key={item.id}
+                className="group flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 max-w-full"
+              >
+                <FileText size={14} className="text-gray-600 shrink-0" />
+                <span className="text-xs text-gray-700 truncate max-w-[220px]" title={item.name}>
+                  {item.name}
+                </span>
+                <button
+                  onClick={() => removePdf(item.id)}
+                  className="text-gray-500 hover:text-gray-700"
+                  title="移除PDF"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* 输入区域 */}
         <div className="relative flex items-center gap-2 p-3">
-          {/* 添加图片按钮 */}
+          {/* 添加附件按钮 */}
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            disabled={disabled || images.length >= 5}
+            disabled={disabled}
             className="flex-shrink-0 w-10 h-10 flex items-center justify-center hover:opacity-60 transition disabled:opacity-50 disabled:cursor-not-allowed"
-            title="上传图片"
+            title="上传图片或PDF"
           >
             <Plus size={20} className="text-gray-600" />
           </button>
@@ -175,7 +248,7 @@ function ChatInput({
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept="image/*,.pdf,application/pdf"
             multiple
             onChange={handleFileSelect}
             className="hidden"
@@ -208,7 +281,7 @@ function ChatInput({
               }}
               disabled={
                 !loading &&
-                (disabled || (!value.trim() && images.length === 0))
+                (disabled || (!value.trim() && images.length === 0 && pdfFiles.length === 0))
               }
               className={`absolute right-0 top-1/2 -translate-y-1/2 flex items-center justify-center w-10 h-10 rounded-full transition ${
                 loading

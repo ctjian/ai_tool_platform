@@ -55,6 +55,8 @@ export interface ConversationPaperItem {
   pdf_url: string
   title?: string
   safe_id?: string
+  source_type?: 'arxiv' | 'upload_pdf' | string
+  origin_name?: string
   last_seen_at?: string
   is_active: boolean
 }

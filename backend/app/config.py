@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE: int = 2097152  # 2MB
     UPLOAD_DIR: str = "./uploads"
     ALLOWED_EXTENSIONS: List[str] = ["jpg", "jpeg", "png", "svg"]
+    CHAT_MAX_PDF_FILES: int = 5
+    CHAT_MAX_PDF_SIZE_MB: int = 20
     
     # OpenAI默认配置（可选，优先使用UI配置）
     OPENAI_API_KEY: str = ""

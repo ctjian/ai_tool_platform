@@ -67,6 +67,24 @@ export const apiClient = {
       `/conversations/${conversationId}/papers/deactivate`,
       { canonical_id: canonicalId }
     ),
+  uploadConversationPdfFiles: async (conversationId: string, files: File[]) => {
+    const formData = new FormData()
+    files.forEach((file) => formData.append('files', file))
+    return api.post<ConversationPapersState>(
+      `/conversations/${conversationId}/papers/upload-pdf`,
+      formData,
+      {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      }
+    )
+  },
+  deleteConversationPaper: (conversationId: string, canonicalId: string) =>
+    api.post<ConversationPapersState>(
+      `/conversations/${conversationId}/papers/delete`,
+      { canonical_id: canonicalId }
+    ),
   
   // 聊天相关 - 使用fetch处理SSE流式响应
   chat: async (data: ChatRequest, signal?: AbortSignal) => {

@@ -37,6 +37,10 @@ _BARE_ID_PATTERN = re.compile(
     r"\b(?P<id>(?:\d{4}\.\d{4,5}|[a-z\-]+/\d{7})(?:v\d+)?)\b",
     re.IGNORECASE,
 )
+_UPLOAD_ID_PATTERN = re.compile(
+    r"upload/(?P<id>[0-9a-z][0-9a-z_-]{2,63})",
+    re.IGNORECASE,
+)
 _TRAILING_PUNCT = ".,;:!?)]}\"'`>"
 
 
@@ -60,6 +64,11 @@ def normalize_arxiv_id(raw: str) -> Optional[tuple[str, str]]:
         canonical = m_old.group(1).lower()
         version = (m_old.group(2) or "").lower()
         return canonical + version, canonical
+
+    m_upload = _UPLOAD_ID_PATTERN.fullmatch(value.lower())
+    if m_upload:
+        canonical = f"upload/{m_upload.group('id').lower()}"
+        return canonical, canonical
 
     return None
 
@@ -132,10 +141,17 @@ def build_target_from_ids(
 ) -> Optional[ArxivTarget]:
     """Build target from persisted paper identifiers in conversation extra."""
     normalized = normalize_arxiv_id(paper_id)
+    if not normalized and canonical_id:
+        normalized = normalize_arxiv_id(canonical_id)
     if not normalized:
         return None
     normalized_paper_id, normalized_canonical_id = normalized
     canonical = (canonical_id or normalized_canonical_id).strip() or normalized_canonical_id
+    normalized_canonical = normalize_arxiv_id(canonical)
+    if normalized_canonical:
+        canonical = normalized_canonical[1]
+    if normalized_paper_id.startswith("upload/"):
+        normalized_paper_id = canonical
     return ArxivTarget(
         paper_id=normalized_paper_id,
         canonical_id=canonical,

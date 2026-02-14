@@ -69,6 +69,8 @@ def normalize_state(extra: Dict[str, Any]) -> Dict[str, Any]:
                     "pdf_url": str(item.get("pdf_url") or f"/papers/{cid}/{cid}.pdf").strip(),
                     "title": str(item.get("title") or "").strip(),
                     "safe_id": str(item.get("safe_id") or cid).strip(),
+                    "source_type": str(item.get("source_type") or "arxiv").strip() or "arxiv",
+                    "origin_name": str(item.get("origin_name") or "").strip(),
                     "last_seen_at": str(item.get("last_seen_at") or "").strip() or _now_iso(),
                 }
             state["papers"]["registry"] = normalized_registry
@@ -111,6 +113,8 @@ def upsert_registry_entries(
             "pdf_url": str(entry.get("pdf_url") or existing.get("pdf_url") or f"/papers/{canonical_id}/{canonical_id}.pdf").strip(),
             "title": str(entry.get("title") or existing.get("title") or "").strip(),
             "safe_id": str(entry.get("safe_id") or existing.get("safe_id") or canonical_id).strip(),
+            "source_type": str(entry.get("source_type") or existing.get("source_type") or "arxiv").strip() or "arxiv",
+            "origin_name": str(entry.get("origin_name") or existing.get("origin_name") or "").strip(),
             "last_seen_at": now,
         }
         registry[canonical_id] = merged
@@ -155,6 +159,18 @@ def deactivate_paper_in_conversation(
     return state
 
 
+def remove_paper_from_conversation(
+    extra: Dict[str, Any],
+    canonical_id: str,
+) -> Dict[str, Any]:
+    state = deactivate_paper_in_conversation(extra, canonical_id)
+    cid = str(canonical_id or "").strip()
+    if not cid:
+        return state
+    state["papers"]["registry"].pop(cid, None)
+    return state
+
+
 def list_papers_from_extra(extra: Dict[str, Any]) -> Dict[str, Any]:
     state = normalize_state(extra)
     active_set = set(state["papers"]["active_ids"])
@@ -169,6 +185,8 @@ def list_papers_from_extra(extra: Dict[str, Any]) -> Dict[str, Any]:
                 "pdf_url": item.get("pdf_url"),
                 "title": item.get("title"),
                 "safe_id": item.get("safe_id"),
+                "source_type": item.get("source_type") or "arxiv",
+                "origin_name": item.get("origin_name") or "",
                 "last_seen_at": item.get("last_seen_at"),
                 "is_active": canonical_id in active_set,
             }

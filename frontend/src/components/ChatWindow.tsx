@@ -6,7 +6,7 @@ import { useAppStore } from '../store/app'
 import apiClient from '../api/client'
 import MessageList from './MessageList'
 import ChatInput from './ChatInput'
-import { Plus, Download, ChevronDown, Check, FileText, X, Copy, AlertCircle, Library } from 'lucide-react'
+import { Plus, Download, ChevronDown, Check, FileText, X, Copy, AlertCircle, Library, Trash2 } from 'lucide-react'
 import { addToast } from './ui'
 import { ConversationPapersState, Message } from '../types/api'
 
@@ -14,6 +14,13 @@ interface ImageFile {
   file: File
   preview: string
   id: string
+}
+
+interface PdfFile {
+  file: File
+  id: string
+  name: string
+  size: number
 }
 
 // 将文件转换为 base64
@@ -28,6 +35,8 @@ const fileToBase64 = (file: File): Promise<string> => {
     reader.readAsDataURL(file)
   })
 }
+
+const DEFAULT_PDF_ONLY_PROMPT = '请总结该文档核心内容'
 
 const DEFAULT_SYSTEM_PROMPT = `你在对话中应当表现得自然、清晰、有条理。
 
@@ -77,6 +86,7 @@ function ChatWindow() {
 
   const [inputValue, setInputValue] = useState('')
   const [images, setImages] = useState<ImageFile[]>([])
+  const [pdfFiles, setPdfFiles] = useState<PdfFile[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false)
   const [promptPanelOpen, setPromptPanelOpen] = useState(false)
@@ -109,6 +119,7 @@ function ChatWindow() {
     | ((
         messageContent: string,
         imageDataList: string[],
+        pdfFileList: PdfFile[],
         options?: { skipInputReset?: boolean; autoTitle?: boolean; retryMessageId?: string }
       ) => Promise<void>)
     | null
@@ -155,6 +166,20 @@ function ChatWindow() {
     } catch (error) {
       console.error('Failed to activate paper:', error)
       addToast('激活失败', 'error')
+    }
+  }, [currentConversation?.id])
+
+  const handleDeletePaper = useCallback(async (canonicalId: string) => {
+    if (!currentConversation?.id) return
+    if (!confirm('确定要删除该资源及其本地文件吗？')) return
+    try {
+      const res = await apiClient.deleteConversationPaper(currentConversation.id, canonicalId)
+      setPaperState(res.data || { active_ids: [], papers: [] })
+      setFocusedPaperId((prev) => (prev === canonicalId ? null : prev))
+      addToast('资源已删除', 'success')
+    } catch (error) {
+      console.error('Failed to delete paper resource:', error)
+      addToast('删除资源失败', 'error')
     }
   }, [currentConversation?.id])
 
@@ -362,9 +387,10 @@ function ChatWindow() {
   const sendMessageWithPayload = async (
     messageContent: string,
     imageDataList: string[],
+    pdfFileList: PdfFile[],
     options?: { skipInputReset?: boolean; autoTitle?: boolean; retryMessageId?: string }
   ) => {
-    if ((!messageContent.trim() && imageDataList.length === 0) || chatLoading) return
+    if ((!messageContent.trim() && imageDataList.length === 0 && pdfFileList.length === 0) || chatLoading) return
     
     // 检查是否有 API Key（前端或后端）
     if (!apiConfig.api_key && !hasBackendApiKey) {
@@ -428,6 +454,15 @@ function ChatWindow() {
       if (!options?.skipInputReset) {
         setInputValue('')
         setImages([])
+        setPdfFiles([])
+      }
+
+      if (pdfFileList.length > 0) {
+        const uploadRes = await apiClient.uploadConversationPdfFiles(
+          conversationId,
+          pdfFileList.map((item) => item.file)
+        )
+        setPaperState(uploadRes.data || { active_ids: [], papers: [] })
       }
 
       // 调用聊天API - 使用完整的API配置
@@ -453,6 +488,9 @@ function ChatWindow() {
         retry_message_id: retryMessageId,
         selected_versions: versionIndices,
       }, controller.signal)
+      if (conversationId) {
+        void refreshConversationPapers(conversationId)
+      }
 
       // 处理流式SSE响应 - 使用缓冲区减少重新渲染
       let assistantMessageId = retryMessageId || ''
@@ -563,6 +601,7 @@ function ChatWindow() {
         markAssistantThinkingDone()
       }
       let firstTokenReceived = false // 标记是否接收到第一个token
+      let statusRefreshTriggered = false
       if (!retryMessageId) {
         waitingMessageId = `waiting-${Date.now()}`
         const waitingMessage = {
@@ -635,6 +674,10 @@ function ChatWindow() {
             updated[msgIdx] = msg
             return updated
           })
+          if (conversationId && !statusRefreshTriggered) {
+            statusRefreshTriggered = true
+            void refreshConversationPapers(conversationId)
+          }
           continue
         } else if (event === 'thinking') {
           if (data && typeof data === 'object' && 'content' in data) {
@@ -800,7 +843,7 @@ function ChatWindow() {
 
   // 发送消息
   const handleSendMessage = async () => {
-    if ((!inputValue.trim() && images.length === 0) || chatLoading) return
+    if ((!inputValue.trim() && images.length === 0 && pdfFiles.length === 0) || chatLoading) return
     if (!apiConfig.api_key && !hasBackendApiKey) {
       addToast('请先配置 API Key', 'warning')
       return
@@ -815,7 +858,11 @@ function ChatWindow() {
       imageDataList.push(base64)
     }
 
-    await sendMessageWithPayload(inputValue, imageDataList, {
+    const finalMessage = inputValue.trim()
+      ? inputValue
+      : (pdfFiles.length > 0 ? DEFAULT_PDF_ONLY_PROMPT : inputValue)
+
+    await sendMessageWithPayload(finalMessage, imageDataList, pdfFiles, {
       skipInputReset: false,
       autoTitle: isFirstMessage,
     })
@@ -866,7 +913,7 @@ function ChatWindow() {
     })
 
     // 发送消息，但标记为重试（会替换而不是新增消息）
-    await sendMessageRef.current?.(userMsg.content, userMsg.images || [], {
+    await sendMessageRef.current?.(userMsg.content, userMsg.images || [], [], {
       skipInputReset: true,
       autoTitle: false,
       retryMessageId: assistantMessageId,  // 传递要替换的消息ID
@@ -916,7 +963,7 @@ function ChatWindow() {
       })
     )
 
-    await sendMessageRef.current?.(nextContent, userMsg.images || [], {
+    await sendMessageRef.current?.(nextContent, userMsg.images || [], [], {
       skipInputReset: true,
       autoTitle: false,
       retryMessageId: assistantMessageId,
@@ -1134,6 +1181,8 @@ function ChatWindow() {
               loading={chatLoading}
               images={images}
               onImagesChange={setImages}
+              pdfFiles={pdfFiles}
+              onPdfFilesChange={setPdfFiles}
             />
             {!apiConfig.api_key && !hasBackendApiKey && (
               <p className="text-xs text-yellow-600 mt-2 text-center">
@@ -1165,6 +1214,8 @@ function ChatWindow() {
                 loading={chatLoading}
                 images={images}
                 onImagesChange={setImages}
+                pdfFiles={pdfFiles}
+                onPdfFilesChange={setPdfFiles}
               />
               {!apiConfig.api_key && !hasBackendApiKey && (
                 <p className="text-xs text-yellow-600 mt-2">
@@ -1191,7 +1242,7 @@ function ChatWindow() {
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
           <div>
             <h3 className="text-sm font-semibold text-gray-900">会话资源</h3>
-            <p className="text-xs text-gray-500">显示当前会话涉及的全部论文，可手动激活/取消激活</p>
+            <p className="text-xs text-gray-500">显示当前会话涉及的全部资源，可手动激活/取消激活/删除</p>
           </div>
           <button
             onClick={() => setPaperPanelOpen(false)}
@@ -1228,11 +1279,22 @@ function ChatWindow() {
                       {paper.filename}
                     </a>
                     <p className="mt-1 text-xs text-gray-500 break-all">
-                      {paper.title || `arXiv:${paper.paper_id}`}
+                      {paper.title || (paper.source_type === 'upload_pdf' ? (paper.origin_name || paper.filename) : `arXiv:${paper.paper_id}`)}
                     </p>
-                    <p className="mt-2 text-[11px] text-gray-400">arXiv:{paper.paper_id}</p>
+                    <p className="mt-2 text-[11px] text-gray-400">
+                      {paper.source_type === 'upload_pdf' ? `upload:${paper.paper_id}` : `arXiv:${paper.paper_id}`}
+                    </p>
                   </div>
                   <div className="flex flex-col items-end gap-1">
+                    <button
+                      type="button"
+                      onClick={() => handleDeletePaper(paper.canonical_id)}
+                      className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50 hover:text-gray-800"
+                      title="彻底删除资源"
+                    >
+                      <Trash2 size={12} />
+                      删除
+                    </button>
                     <label className="inline-flex cursor-pointer items-center">
                       <input
                         type="checkbox"

@@ -4,12 +4,17 @@ Review note:
 - 会话/消息的扩展状态通过 `extra` JSON 管理。
 - 增加 paper 资源 API：查询、激活、取消激活。
 """
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from typing import Optional, Dict, Any
+from datetime import datetime, timezone
 import json
 import logging
+import secrets
+import shutil
+import re
+from pathlib import Path
 
 from app.database import get_session, get_chat_session
 from app.crud.conversation import conversation_crud, message_crud
@@ -26,16 +31,44 @@ from app.schemas.conversation import (
 from app.utils.openai_helper import generate_title_for_conversation
 from app.models.message import Message
 from app.config import settings
+from app.services.cache.paper_store import build_paper_paths, ensure_paper_dir, load_meta, save_meta
 from app.services.session.paper_state import (
     list_papers_from_extra,
     activate_papers_in_conversation,
     deactivate_paper_in_conversation,
+    remove_paper_from_conversation,
+    upsert_registry_entries,
     parse_conversation_extra,
     serialize_conversation_extra,
+    normalize_state,
 )
+from app.services.sources.arxiv.id_parser import safe_id_from_canonical
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error")
+
+
+def _sanitize_display_pdf_name(raw_name: str) -> str:
+    name = Path(str(raw_name or "")).name.strip()
+    if not name:
+        return "uploaded.pdf"
+    # 仅用于显示，路径保存使用 safe_id，不使用原始文件名。
+    name = re.sub(r"[\x00-\x1f\x7f]+", "", name)
+    name = name.replace("/", "_").replace("\\", "_")
+    if not name.lower().endswith(".pdf"):
+        name += ".pdf"
+    if len(name) > 128:
+        base = name[:-4]
+        name = f"{base[:120]}.pdf"
+    return name or "uploaded.pdf"
+
+
+def _generate_upload_canonical_id(existing_ids: set[str]) -> str:
+    for _ in range(64):
+        candidate = f"upload/{secrets.randbelow(10_000_000):07d}"
+        if candidate not in existing_ids:
+            return candidate
+    raise RuntimeError("无法生成唯一上传资源ID，请重试")
 
 
 async def upsert_system_prompt(
@@ -290,6 +323,127 @@ async def deactivate_conversation_paper(
     extra_dict = parse_conversation_extra(conversation.extra)
     updated = deactivate_paper_in_conversation(extra_dict, canonical_id)
     await conversation_crud.set_extra(db, conversation_id, serialize_conversation_extra(updated))
+    return list_papers_from_extra(updated)
+
+
+@router.post("/conversations/{conversation_id}/papers/upload-pdf")
+async def upload_conversation_pdfs(
+    conversation_id: str,
+    files: list[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_chat_session),
+):
+    """上传一批 PDF 到会话资源并默认激活。"""
+    conversation = await conversation_crud.get(db, conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    if not files:
+        raise HTTPException(status_code=400, detail="缺少上传文件")
+    max_files = max(1, int(getattr(settings, "CHAT_MAX_PDF_FILES", 5) or 5))
+    if len(files) > max_files:
+        raise HTTPException(status_code=400, detail=f"单次最多上传 {max_files} 个 PDF")
+
+    max_size_mb = max(1, int(getattr(settings, "CHAT_MAX_PDF_SIZE_MB", 20) or 20))
+    max_size_bytes = max_size_mb * 1024 * 1024
+
+    extra_dict = parse_conversation_extra(conversation.extra)
+    state = normalize_state(extra_dict)
+    existing_ids = set(state["papers"]["registry"].keys())
+    new_entries: list[Dict[str, Any]] = []
+    new_ids: list[str] = []
+
+    for upload in files:
+        display_name = _sanitize_display_pdf_name(upload.filename or "")
+        if not display_name.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail=f"文件必须为 PDF: {display_name}")
+
+        data = await upload.read()
+        size = len(data)
+        if size <= 0:
+            raise HTTPException(status_code=400, detail=f"空文件无法上传: {display_name}")
+        if size > max_size_bytes:
+            raise HTTPException(status_code=400, detail=f"{display_name} 超过 {max_size_mb}MB 限制")
+
+        canonical_id = _generate_upload_canonical_id(existing_ids)
+        existing_ids.add(canonical_id)
+        safe_id = safe_id_from_canonical(canonical_id)
+        paths = build_paper_paths(settings.PAPER_DATA_DIR, safe_id)
+        ensure_paper_dir(paths)
+        paths.pdf_path.write_bytes(data)
+        meta = load_meta(paths) or {}
+        source = meta.get("source") if isinstance(meta.get("source"), dict) else {}
+        source["type"] = "upload_pdf"
+        meta.update(
+            {
+                "paper_id": canonical_id,
+                "canonical_id": canonical_id,
+                "safe_id": safe_id,
+                "origin_name": display_name,
+                "source": source,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        save_meta(paths, meta)
+
+        new_ids.append(canonical_id)
+        new_entries.append(
+            {
+                "canonical_id": canonical_id,
+                "paper_id": canonical_id,
+                "safe_id": safe_id,
+                "filename": display_name,
+                "origin_name": display_name,
+                "title": display_name,
+                "source_type": "upload_pdf",
+                "pdf_url": f"/papers/{safe_id}/{safe_id}.pdf",
+            }
+        )
+
+    updated = upsert_registry_entries(extra_dict, new_entries)
+    updated = activate_papers_in_conversation(
+        updated,
+        canonical_ids=new_ids,
+        max_active=settings.ARXIV_MAX_ACTIVE_PAPERS,
+    )
+    await conversation_crud.set_extra(db, conversation_id, serialize_conversation_extra(updated))
+    return list_papers_from_extra(updated)
+
+
+@router.post("/conversations/{conversation_id}/papers/delete")
+async def delete_conversation_paper(
+    conversation_id: str,
+    payload: Dict[str, Any] = Body(...),
+    db: AsyncSession = Depends(get_chat_session),
+):
+    """彻底删除会话资源（含本地文件目录）。"""
+    conversation = await conversation_crud.get(db, conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    canonical_id = str(payload.get("canonical_id") or "").strip()
+    if not canonical_id:
+        raise HTTPException(status_code=400, detail="缺少 canonical_id")
+
+    extra_dict = parse_conversation_extra(conversation.extra)
+    state = normalize_state(extra_dict)
+    item = state["papers"]["registry"].get(canonical_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="资源不存在")
+
+    updated = remove_paper_from_conversation(extra_dict, canonical_id)
+    await conversation_crud.set_extra(db, conversation_id, serialize_conversation_extra(updated))
+
+    safe_id = str(item.get("safe_id") or "").strip()
+    if safe_id:
+        root = Path(settings.PAPER_DATA_DIR).resolve()
+        target_dir = (root / safe_id).resolve()
+        try:
+            target_dir.relative_to(root)
+            if target_dir.exists():
+                shutil.rmtree(target_dir)
+        except Exception:
+            logger.warning("skip-delete-paper-dir canonical_id=%s safe_id=%s", canonical_id, safe_id)
+
     return list_papers_from_extra(updated)
 
 

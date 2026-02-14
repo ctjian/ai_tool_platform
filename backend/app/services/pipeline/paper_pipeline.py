@@ -111,14 +111,18 @@ def _build_context_prompt(papers: List[Dict], context_text: str) -> str:
     for paper in papers:
         filename = paper.get("filename") or f"{paper.get('canonical_id', '')}.pdf"
         title = (paper.get("title") or "").strip()
+        source_type = str(paper.get("source_type") or "arxiv").strip() or "arxiv"
+        source_label = "arxiv"
+        if source_type == "upload_pdf":
+            source_label = "upload"
         if title:
-            paper_lines.append(f"- {filename} | {title} | arxiv:{paper.get('paper_id')}")
+            paper_lines.append(f"- {filename} | {title} | {source_label}:{paper.get('paper_id')}")
         else:
-            paper_lines.append(f"- {filename} | arxiv:{paper.get('paper_id')}")
+            paper_lines.append(f"- {filename} | {source_label}:{paper.get('paper_id')}")
 
     paper_section = "\n".join(paper_lines).strip() or "- 无"
     return (
-        "你将获得来自一组 arXiv 论文的检索片段。"
+        "你将获得来自一组论文资源的检索片段。"
         "请优先基于这些片段回答用户问题；当片段不足时明确说明不确定。\n\n"
         f"[papers]\n{paper_section}\n\n"
         f"{context_text}"
@@ -193,9 +197,15 @@ def _rewrite_query_with_llm(
     paper_lines = []
     for idx, paper in enumerate(paper_profiles, start=1):
         pid = str(paper.get("paper_id") or "")
+        source_type = str(paper.get("source_type") or "arxiv").strip() or "arxiv"
+        source_label = "upload" if source_type == "upload_pdf" else "arxiv"
+        origin_name = str(paper.get("origin_name") or "").strip()
         title = str(paper.get("title") or "").strip() or "Untitled"
         abstract = str(paper.get("abstract") or "").strip() or "(abstract unavailable)"
-        paper_lines.append(f"[{idx}] arXiv:{pid}\nTitle: {title}\nAbstract: {abstract}")
+        header = f"[{idx}] {source_label}:{pid}"
+        if source_label == "upload" and origin_name:
+            header += f" | File: {origin_name}"
+        paper_lines.append(f"{header}\nTitle: {title}\nAbstract: {abstract}")
     papers_block = "\n\n".join(paper_lines) if paper_lines else "- (none)"
 
     system_prompt = (
@@ -352,92 +362,120 @@ def _prepare_parsed_files(
     progress_callback: ProgressCallback = None,
 ) -> None:
     ensure_paper_dir(paths)
+    existing_meta = load_meta(paths) or {}
+    is_uploaded_pdf = str(target.paper_id or "").startswith("upload/")
     downloaded_url = None
     pdf_size = None
     pdf_sha256 = None
     filename = f"{target.safe_id}.pdf"
 
-    if not paths.pdf_path.exists():
-        started = time.perf_counter()
-        _emit_progress(
-            progress_callback,
-            key="download_pdf",
-            status="running",
-            message=f"正在下载论文 PDF：{filename}",
-            paper_id=target.paper_id,
-            filename=filename,
-        )
-        downloaded_url, pdf_size, pdf_sha256 = download_arxiv_pdf(
-            paper_id=target.paper_id,
-            canonical_id=target.canonical_id,
-            output_pdf=paths.pdf_path,
-            timeout_sec=settings.ARXIV_DOWNLOAD_TIMEOUT_SEC,
-        )
+    if is_uploaded_pdf:
+        if not paths.pdf_path.exists():
+            raise ArxivPipelineError("已上传PDF不存在，无法解析。")
         _emit_progress(
             progress_callback,
             key="download_pdf",
             status="done",
-            message=f"PDF 下载完成：{filename}",
-            paper_id=target.paper_id,
-            filename=filename,
-            elapsed_ms=int((time.perf_counter() - started) * 1000),
-        )
-    else:
-        _emit_progress(
-            progress_callback,
-            key="download_pdf",
-            status="done",
-            message=f"复用本地 PDF：{filename}",
+            message=f"复用已上传 PDF：{filename}",
             paper_id=target.paper_id,
             filename=filename,
             elapsed_ms=0,
             cached=True,
         )
+    else:
+        if not paths.pdf_path.exists():
+            started = time.perf_counter()
+            _emit_progress(
+                progress_callback,
+                key="download_pdf",
+                status="running",
+                message=f"正在下载论文 PDF：{filename}",
+                paper_id=target.paper_id,
+                filename=filename,
+            )
+            downloaded_url, pdf_size, pdf_sha256 = download_arxiv_pdf(
+                paper_id=target.paper_id,
+                canonical_id=target.canonical_id,
+                output_pdf=paths.pdf_path,
+                timeout_sec=settings.ARXIV_DOWNLOAD_TIMEOUT_SEC,
+            )
+            _emit_progress(
+                progress_callback,
+                key="download_pdf",
+                status="done",
+                message=f"PDF 下载完成：{filename}",
+                paper_id=target.paper_id,
+                filename=filename,
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+            )
+        else:
+            _emit_progress(
+                progress_callback,
+                key="download_pdf",
+                status="done",
+                message=f"复用本地 PDF：{filename}",
+                paper_id=target.paper_id,
+                filename=filename,
+                elapsed_ms=0,
+                cached=True,
+            )
 
     parsed = None
-    parse_engine = "source_latex"
+    parse_engine = "grobid" if is_uploaded_pdf else "source_latex"
     parse_meta: Dict[str, object] = {}
     source_fallback_reason = ""
 
-    started = time.perf_counter()
-    _emit_progress(
-        progress_callback,
-        key="parse_source",
-        status="running",
-        message=f"正在解析 LaTeX 源码：{filename}",
-        paper_id=target.paper_id,
-        filename=filename,
-    )
-    try:
-        parsed, source_meta = parse_arxiv_source_to_markdown(
-            paper_id=target.paper_id,
-            canonical_id=target.canonical_id,
-            paper_dir=paths.paper_dir,
-            markdown_path=paths.markdown_path,
-            timeout_sec=settings.ARXIV_DOWNLOAD_TIMEOUT_SEC,
-        )
-        parse_meta["latex_source"] = source_meta
+    if is_uploaded_pdf:
         _emit_progress(
             progress_callback,
             key="parse_source",
             status="done",
-            message=f"LaTeX 源码解析完成：{filename}",
+            message=f"上传 PDF 跳过源码解析：{filename}",
             paper_id=target.paper_id,
             filename=filename,
-            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            elapsed_ms=0,
+            cached=True,
         )
-    except Exception as exc:
-        parse_engine = "grobid"
-        source_fallback_reason = str(exc)
+    else:
+        started = time.perf_counter()
         _emit_progress(
             progress_callback,
             key="parse_source",
-            status="error",
-            message=f"LaTeX 源码解析失败，回退 GROBID：{filename}",
+            status="running",
+            message=f"正在解析 LaTeX 源码：{filename}",
             paper_id=target.paper_id,
             filename=filename,
-            elapsed_ms=int((time.perf_counter() - started) * 1000),
         )
+        try:
+            parsed, source_meta = parse_arxiv_source_to_markdown(
+                paper_id=target.paper_id,
+                canonical_id=target.canonical_id,
+                paper_dir=paths.paper_dir,
+                markdown_path=paths.markdown_path,
+                timeout_sec=settings.ARXIV_DOWNLOAD_TIMEOUT_SEC,
+            )
+            parse_meta["latex_source"] = source_meta
+            _emit_progress(
+                progress_callback,
+                key="parse_source",
+                status="done",
+                message=f"LaTeX 源码解析完成：{filename}",
+                paper_id=target.paper_id,
+                filename=filename,
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+            )
+        except Exception as exc:
+            parse_engine = "grobid"
+            source_fallback_reason = str(exc)
+            _emit_progress(
+                progress_callback,
+                key="parse_source",
+                status="error",
+                message=f"LaTeX 源码解析失败，回退 GROBID：{filename}",
+                paper_id=target.paper_id,
+                filename=filename,
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+            )
 
     if parsed is None:
         if not paths.tei_path.exists():
@@ -518,13 +556,14 @@ def _prepare_parsed_files(
     pdf_stat = paths.pdf_path.stat()
     meta = {
         "schema_version": "v1",
-        "paper_id": f"arxiv:{target.paper_id}",
+        "paper_id": target.paper_id,
         "canonical_id": target.canonical_id,
         "safe_id": target.safe_id,
+        "origin_name": str(existing_meta.get("origin_name") or ""),
         "source": {
-            "type": "arxiv",
+            "type": "upload_pdf" if is_uploaded_pdf else "arxiv",
             "input_fragment": target.source_fragment,
-            "paper_url": f"https://arxiv.org/abs/{target.paper_id}",
+            "paper_url": "" if is_uploaded_pdf else f"https://arxiv.org/abs/{target.paper_id}",
             "position": target.position,
         },
         "pdf": {
@@ -605,16 +644,21 @@ def _read_paper_title_and_abstract(paths) -> Tuple[str, str]:
 def _build_paper_descriptor(target: ArxivTarget, paths) -> Dict:
     meta = load_meta(paths) or {}
     title, abstract = _read_paper_title_and_abstract(paths)
+    source = meta.get("source") if isinstance(meta.get("source"), dict) else {}
+    source_type = str(source.get("type") or "arxiv").strip() or "arxiv"
+    origin_name = str(meta.get("origin_name") or "").strip()
     safe_id = target.safe_id
-    filename = f"{safe_id}.pdf"
+    filename = origin_name if source_type == "upload_pdf" and origin_name else f"{safe_id}.pdf"
     return {
         "paper_id": target.paper_id,
         "canonical_id": target.canonical_id,
         "safe_id": safe_id,
         "filename": filename,
-        "pdf_url": f"/papers/{safe_id}/{filename}",
-        "title": title,
+        "pdf_url": f"/papers/{safe_id}/{safe_id}.pdf",
+        "title": title or origin_name,
         "abstract": abstract,
+        "source_type": source_type,
+        "origin_name": origin_name,
         "meta_updated_at": meta.get("updated_at"),
     }
 
@@ -814,6 +858,8 @@ def build_arxiv_context_for_targets(
                 "paper_id": str(paper.get("paper_id") or ""),
                 "title": str(paper.get("title") or ""),
                 "abstract": _truncate_chars(str(paper.get("abstract") or ""), abstract_limit),
+                "source_type": str(paper.get("source_type") or "arxiv"),
+                "origin_name": str(paper.get("origin_name") or ""),
             }
         )
 
@@ -945,6 +991,8 @@ def build_arxiv_context_for_targets(
             "filename": str(p.get("filename") or ""),
             "pdf_url": str(p.get("pdf_url") or ""),
             "title": str(p.get("title") or ""),
+            "source_type": str(p.get("source_type") or "arxiv"),
+            "origin_name": str(p.get("origin_name") or ""),
             "meta_updated_at": p.get("meta_updated_at"),
         }
         for p in papers
