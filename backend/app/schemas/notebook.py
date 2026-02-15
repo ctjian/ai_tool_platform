@@ -29,3 +29,23 @@ class NotebookQaRequest(BaseModel):
     model: Optional[str] = Field(default="gpt-4o-mini")
     api_key: Optional[str] = Field(default="")
     base_url: Optional[str] = Field(default="")
+
+
+class NotebookGenerateRequest(BaseModel):
+    draft: str = Field(..., min_length=1, max_length=20000)
+    model: Optional[str] = Field(default="gpt-4o-mini")
+    api_key: Optional[str] = Field(default="")
+    base_url: Optional[str] = Field(default="")
+    available_tags: List[str] = Field(default_factory=list)
+
+
+class NotebookGenerateResponse(BaseModel):
+    title: str
+    summary: str
+    tags: List[str]
+    markdown: str
+
+
+class NotebookDeleteResponse(BaseModel):
+    success: bool
+    note_id: str

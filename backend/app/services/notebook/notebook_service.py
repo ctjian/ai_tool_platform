@@ -249,6 +249,40 @@ def load_notebook_note_content(settings, note_id: str) -> str:
     return paths.markdown_path.read_text(encoding="utf-8")
 
 
+def delete_notebook_note(settings, note_id: str) -> str:
+    ensure_notebook_store(settings)
+    cleaned_id = _normalize_id(note_id)
+    if not cleaned_id:
+        raise NotebookNotFoundError("笔记不存在")
+
+    notes = _read_index(settings)
+    removed_item: Optional[Dict] = None
+    remaining: List[Dict] = []
+    for item in notes:
+        if str(item.get("id") or "") == cleaned_id and removed_item is None:
+            removed_item = item
+            continue
+        remaining.append(item)
+    if removed_item is None:
+        raise NotebookNotFoundError("笔记不存在")
+
+    _write_index(settings, remaining)
+
+    paths = _note_paths(settings, cleaned_id)
+    if paths.note_dir.exists():
+        try:
+            shutil.rmtree(paths.note_dir)
+        except Exception as exc:
+            rollback = [removed_item, *remaining]
+            try:
+                _write_index(settings, rollback)
+            except Exception:
+                logger.error("notebook-delete-rollback-failed note_id=%s", cleaned_id)
+            raise NotebookServiceError(f"删除笔记文件失败: {exc}") from exc
+
+    return cleaned_id
+
+
 def _load_chunks(paths: NotebookNotePaths) -> List[Dict]:
     if not paths.chunks_path.exists():
         return []

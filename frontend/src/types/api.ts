@@ -92,6 +92,21 @@ export interface NotebookQaRequest {
   base_url?: string
 }
 
+export interface NotebookGenerateRequest {
+  draft: string
+  model?: string
+  api_key?: string
+  base_url?: string
+  available_tags?: string[]
+}
+
+export interface NotebookGenerateResponse {
+  title: string
+  summary: string
+  tags: string[]
+  markdown: string
+}
+
 export interface ArxivTranslateCreateRequest {
   input_text: string
   api_key?: string

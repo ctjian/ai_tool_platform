@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { BookOpen, ExternalLink, Loader2, Plus, Search, Send, X } from 'lucide-react'
+import { AlertCircle, BookOpen, CheckCircle2, ExternalLink, Loader2, Plus, Search, Send, Sparkles, Trash2, X } from 'lucide-react'
 import { addToast } from '../components/ui'
 import apiClient from '../api/client'
 import { useAppStore } from '../store/app'
@@ -39,14 +39,22 @@ export const AiNotebookPage = () => {
   const [question, setQuestion] = useState('')
   const [asking, setAsking] = useState(false)
   const [qaModel, setQaModel] = useState(apiConfig.model || 'gpt-4o-mini')
+  const [noteModel, setNoteModel] = useState('')
   const qaStreamAbortRef = useRef<AbortController | null>(null)
   const [answerMarkdown, setAnswerMarkdown] = useState('')
   const [sourceHits, setSourceHits] = useState<SourceHit[]>([])
+  const [noteDraft, setNoteDraft] = useState('')
+  const [generatingNote, setGeneratingNote] = useState(false)
+  const [generateStatus, setGenerateStatus] = useState<{
+    type: 'idle' | 'running' | 'success' | 'error'
+    text: string
+  }>({ type: 'idle', text: '' })
   const [newTitle, setNewTitle] = useState('')
   const [newSummary, setNewSummary] = useState('')
   const [newContent, setNewContent] = useState('')
   const [newTagInput, setNewTagInput] = useState('')
   const [newTags, setNewTags] = useState<string[]>([])
+  const [createContentView, setCreateContentView] = useState<'edit' | 'preview'>('edit')
 
   useEffect(() => {
     const loadMeta = async () => {
@@ -115,12 +123,30 @@ export const AiNotebookPage = () => {
     return flat
   }, [groupedQaModels])
 
+  const defaultNoteModel = useMemo(() => {
+    const openaiGroup = groupedQaModels.find((group) => group.name.trim().toLowerCase() === 'openai')
+    if (openaiGroup && openaiGroup.models.length > 0) {
+      return openaiGroup.models[0]
+    }
+    if (qaModelOptions.length > 0) {
+      return qaModelOptions[0]
+    }
+    return 'gpt-4o-mini'
+  }, [groupedQaModels, qaModelOptions])
+
   useEffect(() => {
     if (!qaModelOptions.length) return
     if (!qaModelOptions.includes(qaModel)) {
       setQaModel(qaModelOptions[0])
     }
   }, [qaModelOptions, qaModel])
+
+  useEffect(() => {
+    if (!qaModelOptions.length) return
+    if (!noteModel || !qaModelOptions.includes(noteModel)) {
+      setNoteModel(defaultNoteModel)
+    }
+  }, [qaModelOptions, noteModel, defaultNoteModel])
 
   const filteredNotes = useMemo(() => {
     const key = searchKeyword.trim().toLowerCase()
@@ -176,6 +202,69 @@ export const AiNotebookPage = () => {
     },
     [ensureNoteContent]
   )
+
+  const handleDeleteNote = useCallback(
+    async (note: NotebookMeta) => {
+      if (!window.confirm(`确认删除笔记《${note.title}》？此操作不可恢复。`)) return
+      try {
+        await apiClient.deleteNotebookNote(note.id)
+        setNotes((prev) => prev.filter((item) => item.id !== note.id))
+        setContentById((prev) => {
+          const next = { ...prev }
+          delete next[note.id]
+          return next
+        })
+        if (selectedNoteId === note.id) {
+          setSelectedNoteId(null)
+          setPreviewOpen(false)
+        }
+        addToast('笔记已删除', 'success')
+      } catch (error) {
+        const detail = (error as any)?.response?.data?.detail
+        addToast(detail || '删除笔记失败', 'error')
+      }
+    },
+    [selectedNoteId]
+  )
+
+  const handleGenerateNote = async () => {
+    const draft = noteDraft.trim()
+    if (!draft) {
+      addToast('请先输入草稿内容', 'warning')
+      setGenerateStatus({ type: 'error', text: '草稿为空，无法生成。' })
+      return
+    }
+    if (!noteModel) {
+      addToast('请先选择笔记模型', 'warning')
+      setGenerateStatus({ type: 'error', text: '未选择笔记模型。' })
+      return
+    }
+    try {
+      setGeneratingNote(true)
+      setGenerateStatus({ type: 'running', text: `正在使用 ${noteModel} 整理草稿...` })
+      const res = await apiClient.generateNotebookNote({
+        draft,
+        model: noteModel,
+        api_key: apiConfig.api_key || '',
+        base_url: apiConfig.base_url || '',
+        available_tags: createPresetTags,
+      })
+      const generated = res.data
+      setNewTitle(String(generated?.title || '').trim())
+      setNewSummary(String(generated?.summary || '').trim())
+      setNewTags(Array.isArray(generated?.tags) ? generated.tags.map((item) => String(item || '').trim()).filter(Boolean) : [])
+      setNewContent(String(generated?.markdown || '').trim())
+      setCreateContentView('edit')
+      setGenerateStatus({ type: 'success', text: '整理完成，已填充标题、摘要、标签与 Markdown。' })
+      addToast('笔记草案已生成，可继续手动修改', 'success')
+    } catch (error) {
+      const detail = (error as any)?.response?.data?.detail
+      setGenerateStatus({ type: 'error', text: detail || '生成笔记失败，请检查模型与草稿内容。' })
+      addToast(detail || '生成笔记失败', 'error')
+    } finally {
+      setGeneratingNote(false)
+    }
+  }
 
   const handleAskQuestion = async () => {
     const query = question.trim()
@@ -314,11 +403,13 @@ export const AiNotebookPage = () => {
       setSelectedNoteId(null)
       setPreviewOpen(false)
       setPanelMode('list')
+      setNoteDraft('')
       setNewTitle('')
       setNewSummary('')
       setNewContent('')
       setNewTagInput('')
       setNewTags([])
+      setCreateContentView('edit')
       addToast('笔记已新增', 'success')
     } catch (error) {
       const detail = (error as any)?.response?.data?.detail
@@ -413,16 +504,37 @@ export const AiNotebookPage = () => {
                   </div>
                 )}
                 {filteredNotes.map((note) => (
-                  <button
+                  <div
                     key={note.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => void handleOpenNote(note)}
-                    className={`w-full rounded-lg border px-3 py-3 text-left transition ${
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        void handleOpenNote(note)
+                      }
+                    }}
+                    className={`w-full cursor-pointer rounded-lg border px-3 py-3 text-left transition ${
                       selectedNoteId === note.id
                         ? 'border-gray-900 bg-gray-50'
                         : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                     }`}
                   >
-                    <div className="line-clamp-2 text-sm font-semibold text-gray-900">{note.title}</div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="line-clamp-2 min-w-0 flex-1 text-sm font-semibold text-gray-900">{note.title}</div>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          void handleDeleteNote(note)
+                        }}
+                        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-gray-200 text-gray-500 hover:border-red-300 hover:bg-red-50 hover:text-red-600"
+                        title="删除笔记"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
                     {note.summary && <div className="mt-1 line-clamp-2 text-xs text-gray-600">{note.summary}</div>}
                     <div className="mt-2 flex flex-wrap gap-1">
                       {(note.tags || []).map((tag) => (
@@ -431,7 +543,7 @@ export const AiNotebookPage = () => {
                         </span>
                       ))}
                     </div>
-                  </button>
+                  </div>
                 ))}
               </div>
             </>
@@ -524,6 +636,67 @@ export const AiNotebookPage = () => {
           )}
           {panelMode === 'create' && (
             <div className="flex flex-col gap-3">
+              <div className="mb-1 flex items-center gap-2">
+                <span className="text-xs text-gray-600">笔记模型</span>
+                <select
+                  value={noteModel}
+                  onChange={(e) => setNoteModel(e.target.value)}
+                  className="h-9 min-w-[280px] rounded-lg border border-gray-200 bg-white px-3 text-xs text-gray-800 outline-none focus:border-gray-300"
+                >
+                  {groupedQaModels.map((group) => (
+                    <optgroup key={`note-${group.name}`} label={group.name}>
+                      {group.models.map((model) => (
+                        <option key={`note-${group.name}-${model}`} value={model}>
+                          {model}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 p-3">
+                <div className="mb-2 text-xs font-semibold text-gray-600">草稿输入</div>
+                <textarea
+                  value={noteDraft}
+                  onChange={(e) => setNoteDraft(e.target.value)}
+                  placeholder="粘贴你的草稿、零散排障记录或想法，点击“生成笔记”自动整理..."
+                  className="min-h-[160px] w-full resize-y rounded-lg border border-gray-200 p-3 text-sm text-gray-800 outline-none focus:border-gray-300"
+                />
+                <div className="mt-3 flex items-center justify-between">
+                  <span className="text-xs text-gray-500">模型会输出标题、摘要、标签和完整 Markdown，可继续手改。</span>
+                  <button
+                    type="button"
+                    onClick={handleGenerateNote}
+                    disabled={generatingNote}
+                    className="inline-flex items-center gap-2 rounded-md bg-gray-900 px-3 py-1.5 text-xs text-white hover:bg-gray-800 disabled:opacity-60"
+                  >
+                    {generatingNote ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                    {generatingNote ? '生成中...' : '生成笔记'}
+                  </button>
+                </div>
+                {generateStatus.type !== 'idle' && (
+                  <div
+                    className={`mt-3 inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs ${
+                      generateStatus.type === 'running'
+                        ? 'border-blue-200 bg-blue-50 text-blue-700'
+                        : generateStatus.type === 'success'
+                          ? 'border-green-200 bg-green-50 text-green-700'
+                          : 'border-red-200 bg-red-50 text-red-700'
+                    }`}
+                  >
+                    {generateStatus.type === 'running' ? (
+                      <Loader2 size={12} className="animate-spin" />
+                    ) : generateStatus.type === 'success' ? (
+                      <CheckCircle2 size={12} />
+                    ) : (
+                      <AlertCircle size={12} />
+                    )}
+                    <span>{generateStatus.text}</span>
+                  </div>
+                )}
+              </div>
+
               <input
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
@@ -537,7 +710,7 @@ export const AiNotebookPage = () => {
                 className="h-10 w-full rounded-lg border border-gray-200 px-3 text-sm text-gray-800 outline-none focus:border-gray-300"
               />
               <div className="rounded-lg border border-gray-200 p-3">
-                <div className="mb-2 text-xs font-semibold text-gray-600">标签（可新增自定义标签）</div>
+                <div className="mb-2 text-xs font-semibold text-gray-600">标签</div>
                 <div className="mb-2 flex flex-wrap gap-2">
                   {customCreateTags.map((tag) => (
                     <span key={tag} className="inline-flex items-center gap-1 rounded-full bg-gray-900 px-2 py-1 text-xs text-white">
@@ -595,23 +768,60 @@ export const AiNotebookPage = () => {
                   })}
                 </div>
               </div>
-              <textarea
-                value={newContent}
-                onChange={(e) => setNewContent(e.target.value)}
-                placeholder="在这里粘贴原始笔记（支持 Markdown）..."
-                className="min-h-[220px] flex-1 resize-none rounded-lg border border-gray-200 p-3 text-sm text-gray-800 outline-none focus:border-gray-300"
-              />
+              <div className="rounded-lg border border-gray-200">
+                <div className="border-b border-gray-200 px-3 py-2">
+                  <div className="inline-flex rounded-md border border-gray-200 bg-gray-50 p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setCreateContentView('edit')}
+                      className={`rounded px-2 py-1 text-[11px] ${
+                        createContentView === 'edit' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600'
+                      }`}
+                    >
+                      编辑
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCreateContentView('preview')}
+                      className={`rounded px-2 py-1 text-[11px] ${
+                        createContentView === 'preview' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600'
+                      }`}
+                    >
+                      预览
+                    </button>
+                  </div>
+                </div>
+                {createContentView === 'edit' ? (
+                  <textarea
+                    value={newContent}
+                    onChange={(e) => setNewContent(e.target.value)}
+                    placeholder="Markdown 笔记内容..."
+                    className="min-h-[240px] w-full resize-y rounded-b-lg border-0 p-3 text-sm text-gray-800 outline-none focus:ring-0"
+                  />
+                ) : (
+                  <div className="min-h-[240px] rounded-b-lg bg-gray-50 p-3">
+                    {newContent.trim() ? (
+                      <MarkdownRenderer content={newContent} preset="notebook" normalizeLatexDelimiters />
+                    ) : (
+                      <div className="text-sm text-gray-500">暂无内容可预览。</div>
+                    )}
+                  </div>
+                )}
+              </div>
               <div className="flex items-center justify-between">
                 <span className="text-xs text-gray-500">保存后会写入后端笔记库，并建立检索索引。</span>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => {
+                      setNoteDraft('')
+                      setGenerateStatus({ type: 'idle', text: '' })
                       setNewTitle('')
                       setNewSummary('')
                       setNewContent('')
                       setNewTagInput('')
                       setNewTags([])
+                      setCreateContentView('edit')
                     }}
                     className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
                   >

@@ -6,6 +6,8 @@ import {
   ChatRequest,
   ConversationPapersState,
   NotebookNote,
+  NotebookGenerateRequest,
+  NotebookGenerateResponse,
   NotebookQaRequest,
   ArxivTranslateCreateRequest,
   ArxivTranslateJob,
@@ -91,6 +93,8 @@ export const apiClient = {
   // Notebook 相关
   listNotebookNotes: () =>
     api.get<{ notes: NotebookNote[] }>('/notebook/notes'),
+  deleteNotebookNote: (noteId: string) =>
+    api.delete<{ success: boolean; note_id: string }>(`/notebook/notes/${noteId}`),
   createNotebookNote: (payload: {
     title: string
     summary?: string
@@ -98,6 +102,8 @@ export const apiClient = {
     content: string
   }) =>
     api.post<NotebookNote>('/notebook/notes', payload),
+  generateNotebookNote: (payload: NotebookGenerateRequest) =>
+    api.post<NotebookGenerateResponse>('/notebook/notes/generate', payload),
   notebookQaStream: async (payload: NotebookQaRequest, signal?: AbortSignal) => {
     const response = await fetch(`${API_BASE}/notebook/qa/stream`, {
       method: 'POST',
