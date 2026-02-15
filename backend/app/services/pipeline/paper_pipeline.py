@@ -478,6 +478,11 @@ def _prepare_parsed_files(
             )
 
     if parsed is None:
+        grobid_parse_meta: Dict[str, str] = {
+            "service_url": "",
+            "endpoint": "",
+            "attempt": "0",
+        }
         if not paths.tei_path.exists():
             started = time.perf_counter()
             _emit_progress(
@@ -488,10 +493,10 @@ def _prepare_parsed_files(
                 paper_id=target.paper_id,
                 filename=filename,
             )
-            parse_pdf_to_tei(
+            grobid_parse_meta = parse_pdf_to_tei(
                 pdf_path=paths.pdf_path,
                 tei_path=paths.tei_path,
-                service_url=settings.GROBID_URL,
+                service_urls=settings.grobid_urls_list,
                 timeout_sec=settings.GROBID_TIMEOUT_SEC,
             )
             _emit_progress(
@@ -516,7 +521,9 @@ def _prepare_parsed_files(
             )
         parsed = tei_to_markdown(paths.tei_path, paths.markdown_path)
         parse_meta["grobid"] = {
-            "service_url": settings.GROBID_URL,
+            "service_url": str(grobid_parse_meta.get("service_url") or ""),
+            "endpoint": str(grobid_parse_meta.get("endpoint") or ""),
+            "attempt": str(grobid_parse_meta.get("attempt") or ""),
             "parsed_at": _now_iso(),
             "tei_path": str(paths.tei_path),
         }

@@ -4,13 +4,14 @@
 import React, { forwardRef, useMemo, useState } from 'react'
 import { Message } from '../types/api'
 import { useAppStore } from '../store/app'
-import { Copy, Check, RotateCcw, ChevronLeft, ChevronRight, Loader2, AlertCircle, Pencil, X } from 'lucide-react'
+import { Copy, Check, RotateCcw, ChevronLeft, ChevronRight, Loader2, AlertCircle, Pencil, X, FileText } from 'lucide-react'
 import { addToast } from './ui'
 import MarkdownRenderer from './MarkdownRenderer'
 
 interface MessageListProps {
   messages: Message[]
   onRetry?: (assistantMessageId: string) => void
+  onOpenRoundPrompt?: (msg: Message) => void
   onSubmitUserEdit?: (payload: {
     userMessageId: string
     assistantMessageId: string
@@ -19,7 +20,7 @@ interface MessageListProps {
 }
 
 const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
-  ({ messages, onRetry, onSubmitUserEdit }, ref) => {
+  ({ messages, onRetry, onOpenRoundPrompt, onSubmitUserEdit }, ref) => {
     const [copiedId, setCopiedId] = useState<string | null>(null)
     const [previewImage, setPreviewImage] = useState<string | null>(null)
     const [editingUserMessageId, setEditingUserMessageId] = useState<string | null>(null)
@@ -99,6 +100,27 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
       return value.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
     }
 
+    const getRoundPromptMessages = (msg: Message): any[] => {
+      let extra: any = (msg as any)?.extra
+      if (typeof extra === 'string') {
+        try {
+          extra = JSON.parse(extra)
+        } catch {
+          extra = null
+        }
+      }
+      let roundPrompt: any = extra?.round_prompt
+      if (typeof roundPrompt === 'string') {
+        try {
+          roundPrompt = JSON.parse(roundPrompt)
+        } catch {
+          roundPrompt = null
+        }
+      }
+      const messagesList = roundPrompt?.messages
+      return Array.isArray(messagesList) ? messagesList : []
+    }
+
     // 获取版本总数
     const getTotalVersions = (msg: Message): number => {
       if (msg.role === 'assistant' && msg.retry_versions) {
@@ -162,6 +184,7 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
               const thinkingCollapsed = msg.thinking_collapsed ?? true
               const thinkingDone = msg.thinking_done ?? !isWaiting
               const thinkingLabel = thinkingDone ? '思考完成' : '正在思考'
+              const hasRoundPrompt = msg.role === 'assistant' && getRoundPromptMessages(msg).length > 0
               const userReplyInfo = msg.role === 'user'
                 ? (() => {
                     for (let i = msgIdx + 1; i < visibleMessages.length; i += 1) {
@@ -420,6 +443,16 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
                             <Copy size={14} className="text-gray-600" />
                           )}
                         </button>
+                        {hasRoundPrompt && (
+                          <button
+                            onClick={() => onOpenRoundPrompt?.(msg)}
+                            className="flex items-center gap-1 px-2 py-1 hover:bg-gray-100 rounded"
+                            title="查看本轮提示词"
+                            aria-label="查看本轮提示词"
+                          >
+                            <FileText size={14} className="text-gray-600" />
+                          </button>
+                        )}
                         {msg.id === latestRetryableAssistantId && (
                           <button
                             onClick={() => onRetry?.(msg.id)}

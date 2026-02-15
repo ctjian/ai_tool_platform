@@ -63,6 +63,54 @@ const getSystemPromptFromMessages = (msgs: Message[]): string => {
   return ''
 }
 
+const getRoundPromptDisplayMessages = (trace: any): any[] => {
+  if (!trace || !Array.isArray(trace.messages)) return []
+  return [...trace.messages].sort((a: any, b: any) => {
+    const ai = Number(a?.index || 0)
+    const bi = Number(b?.index || 0)
+    return ai - bi
+  })
+}
+
+const formatRoundPromptText = (trace: any): string => {
+  const displayMessages = getRoundPromptDisplayMessages(trace)
+  if (!trace || displayMessages.length === 0) return ''
+  const model = trace.model ? `模型: ${trace.model}` : ''
+  const tool = trace.tool_id ? `工具: ${trace.tool_id}` : '工具: 通用聊天'
+  const rounds = `上下文轮数: ${trace.context_rounds ?? '默认'}`
+  const header = [model, tool, rounds].filter(Boolean).join('\n')
+  const body = displayMessages
+    .map((m: any) => {
+      const role = String(m?.role || '')
+      const content = String(m?.content || '')
+      return `## ${role}\n${content}`
+    })
+    .join('\n\n---\n\n')
+  return `${header}\n\n${body}`.trim()
+}
+
+const hasRoundPromptPayload = (message: any): boolean => {
+  if (!message) return false
+  let extra = message?.extra
+  if (typeof extra === 'string') {
+    try {
+      extra = JSON.parse(extra)
+    } catch {
+      extra = null
+    }
+  }
+  let roundPrompt = extra?.round_prompt
+  if (typeof roundPrompt === 'string') {
+    try {
+      roundPrompt = JSON.parse(roundPrompt)
+    } catch {
+      roundPrompt = null
+    }
+  }
+  const list = roundPrompt?.messages
+  return Array.isArray(list) && list.length > 0
+}
+
 function ChatWindow() {
   const {
     currentTool,
@@ -91,6 +139,9 @@ function ChatWindow() {
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false)
   const [promptPanelOpen, setPromptPanelOpen] = useState(false)
   const [paperPanelOpen, setPaperPanelOpen] = useState(false)
+  const [roundPromptPanelOpen, setRoundPromptPanelOpen] = useState(false)
+  const [selectedRoundPrompt, setSelectedRoundPrompt] = useState<any | null>(null)
+  const [selectedRoundPromptMessageId, setSelectedRoundPromptMessageId] = useState<string | null>(null)
   const [focusedPaperId, setFocusedPaperId] = useState<string | null>(null)
   const [systemPromptDraft, setSystemPromptDraft] = useState('')
   const [promptSaving, setPromptSaving] = useState(false)
@@ -384,6 +435,48 @@ function ChatWindow() {
     }
   }
 
+  const handleOpenRoundPrompt = useCallback((msg: Message) => {
+    let payload = (msg as any)?.extra?.round_prompt
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload)
+      } catch {
+        payload = null
+      }
+    }
+    const hasMessages = Array.isArray(payload?.messages) && payload.messages.length > 0
+    if (!hasMessages) {
+      addToast('该轮未记录提示词快照', 'warning')
+      return
+    }
+    setPromptPanelOpen(false)
+    setPaperPanelOpen(false)
+    setSelectedRoundPrompt(payload)
+    setSelectedRoundPromptMessageId(msg.id)
+    setRoundPromptPanelOpen(true)
+  }, [])
+
+  const handleCopyRoundPrompt = async () => {
+    if (!selectedRoundPrompt) return
+    try {
+      const text = formatRoundPromptText(selectedRoundPrompt)
+      if (!text) {
+        addToast('该轮提示词为空', 'warning')
+        return
+      }
+      await navigator.clipboard.writeText(text)
+      addToast('已复制本轮提示词', 'success')
+    } catch (error) {
+      console.error('Failed to copy round prompt:', error)
+      addToast('复制失败', 'error')
+    }
+  }
+
+  const roundPromptDisplayMessages = useMemo(
+    () => getRoundPromptDisplayMessages(selectedRoundPrompt),
+    [selectedRoundPrompt]
+  )
+
   const sendMessageWithPayload = async (
     messageContent: string,
     imageDataList: string[],
@@ -549,20 +642,38 @@ function ChatWindow() {
       }
       const upsertCompleteAssistantMessage = (completeMessage: any) => {
         setMessages((msgs) => {
-          const msgIdx = msgs.findIndex(m => m.id === assistantMessageId)
-          if (msgIdx >= 0) {
-            const updatedMsgs = [...msgs]
-            const prev = updatedMsgs[msgIdx] as any
-            updatedMsgs[msgIdx] = {
-              ...completeMessage,
-              thinking_collapsed: prev?.thinking_collapsed ?? (completeMessage.thinking ? true : undefined),
-              thinking_done: true,
-            }
-            return updatedMsgs
+          const candidateIds = [
+            String(completeMessage?.id || ''),
+            String(assistantMessageId || ''),
+            String(waitingMessageId || ''),
+          ].filter(Boolean)
+
+          let msgIdx = -1
+          for (const id of candidateIds) {
+            msgIdx = msgs.findIndex((m) => m.id === id)
+            if (msgIdx >= 0) break
           }
-          return msgs
+          if (msgIdx < 0) {
+            const lastAssistantReverseIdx = [...msgs].reverse().findIndex((m) => m.role === 'assistant')
+            if (lastAssistantReverseIdx >= 0) {
+              msgIdx = msgs.length - 1 - lastAssistantReverseIdx
+            }
+          }
+          if (msgIdx < 0) return msgs
+
+          const updatedMsgs = [...msgs]
+          const prev = updatedMsgs[msgIdx] as any
+          updatedMsgs[msgIdx] = {
+            ...completeMessage,
+            thinking_collapsed: prev?.thinking_collapsed ?? (completeMessage.thinking ? true : undefined),
+            thinking_done: true,
+          }
+          return updatedMsgs
         })
-        setVersionIndices({ ...versionIndices, [assistantMessageId]: 0 })
+        const persistedId = String(completeMessage?.id || assistantMessageId || '')
+        if (persistedId) {
+          setVersionIndices({ ...versionIndices, [persistedId]: 0 })
+        }
       }
       const ensureAssistantMessageId = () => {
         if (!assistantMessageId) return
@@ -599,6 +710,44 @@ function ChatWindow() {
         }
         clearWaitingMessage()
         markAssistantThinkingDone()
+      }
+      const syncConversationMessagesFromServer = async (expectedAssistantId?: string) => {
+        if (!conversationId) return
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            const res = await apiClient.getConversation(conversationId)
+            const serverMessages = res.data?.messages || []
+            setMessages((prev) => {
+              const uiStateById = new Map(
+                prev.map((m: any) => [
+                  m.id,
+                  {
+                    thinking_collapsed: m.thinking_collapsed,
+                  },
+                ])
+              )
+              return serverMessages.map((m: any) => {
+                const ui = uiStateById.get(m.id)
+                return {
+                  ...m,
+                  thinking_collapsed:
+                    ui?.thinking_collapsed ?? (m.thinking ? true : undefined),
+                  thinking_done: true,
+                }
+              })
+            })
+
+            if (!expectedAssistantId) return
+            const expected = serverMessages.find((m: any) => m.id === expectedAssistantId)
+            if (expected && hasRoundPromptPayload(expected)) {
+              return
+            }
+          } catch (error) {
+            console.error('Failed to sync conversation messages from server:', error)
+            return
+          }
+          await new Promise((resolve) => setTimeout(resolve, 120))
+        }
       }
       let firstTokenReceived = false // 标记是否接收到第一个token
       let statusRefreshTriggered = false
@@ -747,6 +896,7 @@ function ChatWindow() {
               ? (data as any).message
               : undefined
           finalizeAssistantTerminal(completeMessage, { ensureAssistantId: true })
+          await syncConversationMessagesFromServer(String(completeMessage?.id || ''))
           break
         } else if (event === 'stopped') {
           const completeMessage =
@@ -754,6 +904,7 @@ function ChatWindow() {
               ? (data as any).message
               : undefined
           finalizeAssistantTerminal(completeMessage, { ensureAssistantId: true })
+          await syncConversationMessagesFromServer(String(completeMessage?.id || ''))
           break
         } else if (event === 'error') {
           // 错误事件
@@ -1199,6 +1350,7 @@ function ChatWindow() {
               messages={messages}
               ref={messagesContainerRef}
               onRetry={handleRetryMessage}
+              onOpenRoundPrompt={handleOpenRoundPrompt}
               onSubmitUserEdit={handleSubmitUserEdit}
             />
           </div>
@@ -1382,6 +1534,66 @@ function ChatWindow() {
               )}
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* 本轮提示词面板：从 assistant.extra.round_prompt 打开 */}
+      <div
+        className={`absolute inset-0 z-40 transition ${
+          roundPromptPanelOpen ? 'bg-black/20' : 'pointer-events-none'
+        }`}
+        onClick={() => setRoundPromptPanelOpen(false)}
+      />
+      <div
+        className={`absolute right-0 top-0 h-full w-[520px] max-w-[95vw] bg-white border-l border-gray-200 shadow-xl z-50 transform transition-transform duration-200 ${
+          roundPromptPanelOpen ? 'translate-x-0' : 'translate-x-full'
+        }`}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900">本轮提示词</h3>
+            <p className="text-xs text-gray-500">显示该条回复实际发送给模型的消息序列（图片已脱敏）</p>
+          </div>
+          <button
+            onClick={() => setRoundPromptPanelOpen(false)}
+            className="p-1 rounded hover:bg-gray-100 text-gray-500"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="h-[calc(100%-56px)] overflow-y-auto p-4">
+          {!selectedRoundPrompt || roundPromptDisplayMessages.length === 0 ? (
+            <div className="text-sm text-gray-500">未找到本轮提示词数据。</div>
+          ) : (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
+                <div>消息ID: {selectedRoundPromptMessageId || '-'}</div>
+                <div>模型: {selectedRoundPrompt.model || '-'}</div>
+                <div>工具: {selectedRoundPrompt.tool_id || '通用聊天'}</div>
+                <div>上下文轮数: {selectedRoundPrompt.context_rounds ?? '默认'}</div>
+              </div>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleCopyRoundPrompt}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50"
+                >
+                  <Copy size={14} />
+                  复制全部
+                </button>
+              </div>
+              {roundPromptDisplayMessages.map((item, idx) => (
+                <div key={`${item?.index ?? idx}-${item?.role ?? 'role'}`} className="rounded-lg border border-gray-200 bg-white">
+                  <div className="border-b border-gray-200 bg-gray-50 px-3 py-2 text-xs font-medium text-gray-700">
+                    {idx + 1}. {String(item?.role || '')}
+                  </div>
+                  <pre className="max-h-[320px] overflow-auto whitespace-pre-wrap break-words px-3 py-3 text-xs leading-6 text-gray-800">
+                    {String(item?.content || '')}
+                  </pre>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

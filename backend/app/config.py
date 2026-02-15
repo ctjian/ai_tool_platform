@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     PRICE_CURRENCY: str = "USD"
     
     # 论文解析（arXiv + GROBID）
-    GROBID_URL: str = "https://lfoppiano-grobid.hf.space"
+    GROBID_URLS: str = "https://lfoppiano-grobid.hf.space"
     PAPER_DATA_DIR: str = str(Path(__file__).resolve().parents[1] / "data" / "chat" / "papers")
     ARXIV_MAX_ACTIVE_PAPERS: int = 3
     ARXIV_CONTEXT_TOP_K: int = 8
@@ -173,6 +173,19 @@ class Settings(BaseSettings):
     @property
     def proxy_enabled(self) -> bool:
         return bool(self.ACCESS_TOKEN and self.PROXY_BASE_URL and self.PROXY_MODELS)
+
+    @property
+    def grobid_urls_list(self) -> List[str]:
+        """获取 GROBID 服务列表（按配置顺序）。"""
+        urls: List[str] = []
+        seen = set()
+        for part in str(self.GROBID_URLS or "").split(","):
+            url = part.strip().rstrip("/")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            urls.append(url)
+        return urls
 
     
     class Config:
