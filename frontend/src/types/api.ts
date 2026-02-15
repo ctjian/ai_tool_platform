@@ -160,6 +160,7 @@ export interface ArxivTranslateHistoryItem {
   paper_title?: string
   original_pdf_url?: string
   translated_pdf_url?: string
+  cost_meta?: any
   artifacts: ArxivTranslateArtifact[]
 }
 

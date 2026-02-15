@@ -94,6 +94,7 @@ class ArxivTranslateHistoryItem(BaseModel):
     paper_title: Optional[str] = None
     original_pdf_url: Optional[str] = None
     translated_pdf_url: Optional[str] = None
+    cost_meta: Optional[dict] = None
     artifacts: List[ArxivTranslateArtifact] = []
 
 

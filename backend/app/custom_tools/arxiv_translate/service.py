@@ -63,6 +63,7 @@ from app.custom_tools.arxiv_translate.tex_project import (
 )
 from app.custom_tools.arxiv_translate.translator import TranslatorConfig, translate_chunks
 from app.services.sources.arxiv.downloader import download_arxiv_pdf
+from app.utils.pricing import compute_text_cost
 
 
 STATIC_PREFIX = "/custom-tools-files/arxiv_translate"
@@ -163,8 +164,11 @@ def _clean_tex_title(raw: str) -> str:
     out = (raw or "").strip()
     if not out:
         return ""
+    # Remove LaTeX line-break escapes that may pollute list titles.
+    out = re.sub(r"\\\\+", " ", out)
     out = re.sub(r"\\[a-zA-Z]+\*?(?:\[[^\]]*\])?\{([^{}]*)\}", r"\1", out)
     out = re.sub(r"\\[a-zA-Z]+\*?", " ", out)
+    out = out.replace("\\", " ")
     out = out.replace("{", " ").replace("}", " ").replace("~", " ")
     out = re.sub(r"\s+", " ", out).strip()
     return out[:240]
@@ -184,9 +188,60 @@ def _extract_paper_title_from_main_tex(project_root: Path, main_tex_rel: Path) -
 
 
 def _build_task_name(paper_id: str, title: str) -> str:
-    if title:
-        return f"arXiv:{paper_id} · {title}"
+    cleaned_title = _clean_tex_title(title)
+    if cleaned_title:
+        return f"arXiv:{paper_id} · {cleaned_title}"
     return f"arXiv:{paper_id}"
+
+
+def _sanitize_task_name(raw: str, *, paper_id: str, title: str) -> str:
+    fallback = _build_task_name(paper_id, title)
+    text = str(raw or "").strip()
+    if not text:
+        return fallback
+    text = re.sub(r"[\\\s]+$", "", text)
+    prefix = f"arXiv:{paper_id}"
+    if not text.startswith(prefix):
+        return fallback
+    suffix = text[len(prefix):].strip()
+    if suffix.startswith("·"):
+        suffix = suffix[1:].strip()
+    if not suffix:
+        return prefix
+    return _build_task_name(paper_id, suffix)
+
+
+def _init_cost_meta(model: str) -> Dict[str, Any]:
+    return {
+        "currency": settings.PRICE_CURRENCY,
+        "model": model,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "total_cost": 0.0,
+    }
+
+
+def _accumulate_usage_cost(meta: Dict[str, Any], *, model: str, usage: Dict[str, int]) -> None:
+    prompt_tokens = int(usage.get("prompt_tokens") or 0)
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+    if prompt_tokens <= 0 and completion_tokens <= 0:
+        return
+
+    cost_meta = meta.get("cost_meta")
+    if not isinstance(cost_meta, dict):
+        cost_meta = _init_cost_meta(model)
+        meta["cost_meta"] = cost_meta
+
+    cost_meta["prompt_tokens"] = int(cost_meta.get("prompt_tokens") or 0) + prompt_tokens
+    cost_meta["completion_tokens"] = int(cost_meta.get("completion_tokens") or 0) + completion_tokens
+    cost_meta["total_tokens"] = int(cost_meta.get("total_tokens") or 0) + prompt_tokens + completion_tokens
+
+    computed = compute_text_cost(model, prompt_tokens, completion_tokens)
+    if computed:
+        cost_meta["currency"] = computed.get("currency") or cost_meta.get("currency") or settings.PRICE_CURRENCY
+        cost_meta["model"] = computed.get("model") or model
+        cost_meta["total_cost"] = float(cost_meta.get("total_cost") or 0.0) + float(computed.get("total_cost") or 0.0)
 
 
 def _build_output_artifacts(paths: JobPaths) -> List[Dict[str, Any]]:
@@ -449,6 +504,7 @@ async def create_job(payload: Dict[str, Any]) -> Dict[str, Any]:
     max_compile_tries = int(payload.get("max_compile_tries") or DEFAULT_MAX_COMPILE_TRIES)
 
     job_id = str(uuid.uuid4())
+    model_name = str(payload.get("model") or DEFAULT_TRANSLATE_MODEL)
     job = {
         "job_id": job_id,
         "status": "queued",
@@ -461,7 +517,7 @@ async def create_job(payload: Dict[str, Any]) -> Dict[str, Any]:
         "steps": [],
         "artifacts": [],
         "meta": {
-            "model": (payload.get("model") or DEFAULT_TRANSLATE_MODEL),
+            "model": model_name,
             "target_language": (payload.get("target_language") or DEFAULT_TARGET_LANGUAGE),
             "paper_title": "",
             "task_name": _build_task_name(paper_id, ""),
@@ -471,6 +527,8 @@ async def create_job(payload: Dict[str, Any]) -> Dict[str, Any]:
             "max_compile_tries": max_compile_tries,
             "compile_attempts": 0,
             "guard_fallback_chunks": 0,
+            "request_count": 0,
+            "cost_meta": _init_cost_meta(model_name),
         },
         "_payload": dict(payload),
         "_task": None,
@@ -544,13 +602,20 @@ def _make_history_row_from_snapshot(snap: Dict[str, Any], *, paths: Optional[Job
     )
     meta = dict(snap.get("meta") or {})
 
-    title = str(meta.get("paper_title") or "")
-    if (not title) and paths and ("main_tex" in meta):
+    title = _clean_tex_title(str(meta.get("paper_title") or ""))
+    extracted_title = ""
+    if paths and ("main_tex" in meta):
         try:
-            title = _extract_paper_title_from_main_tex(paths.extract_dir, Path(str(meta["main_tex"])))
+            extracted_title = _extract_paper_title_from_main_tex(paths.extract_dir, Path(str(meta["main_tex"])))
         except Exception:
-            title = ""
-    task_name = str(meta.get("task_name") or _build_task_name(paper_id, title))
+            extracted_title = ""
+    if extracted_title:
+        title = extracted_title
+    task_name = _build_task_name(paper_id, title) if title else _sanitize_task_name(
+        str(meta.get("task_name") or ""),
+        paper_id=paper_id,
+        title="",
+    )
 
     artifacts = []
     if paths:
@@ -585,6 +650,7 @@ def _make_history_row_from_snapshot(snap: Dict[str, Any], *, paths: Optional[Job
         "paper_title": title or None,
         "original_pdf_url": original_pdf_url or None,
         "translated_pdf_url": translated_pdf_url or None,
+        "cost_meta": meta.get("cost_meta"),
         "artifacts": artifacts,
     }
 
@@ -711,6 +777,7 @@ async def _run_job(job_id: str) -> None:
 
         file_states: Dict[str, Dict[str, Any]] = {}
         translated_done = 0
+        usage_lock = asyncio.Lock()
         for index, rel in enumerate(tex_files, start=1):
             if job.get("_cancel_requested"):
                 raise asyncio.CancelledError()
@@ -747,6 +814,13 @@ async def _run_job(job_id: str) -> None:
                     job["updated_at"] = _now_iso()
                     _persist_job(job)
 
+                async def _on_usage(usage: Dict[str, int]) -> None:
+                    async with usage_lock:
+                        _accumulate_usage_cost(job["meta"], model=translator_cfg.model, usage=usage)
+                        job["meta"]["request_count"] = int(job["meta"].get("request_count") or 0) + 1
+                        job["updated_at"] = _now_iso()
+                        _persist_job(job)
+
                 _append_step(
                     job,
                     key="translate_file",
@@ -760,6 +834,7 @@ async def _run_job(job_id: str) -> None:
                     translator_cfg,
                     extra_instruction=extra_prompt,
                     on_progress=_on_progress,
+                    on_usage=_on_usage,
                 )
                 for seg_idx, translated in zip(translatable_indices, translated_chunks):
                     original = state_segments[seg_idx]["original"]

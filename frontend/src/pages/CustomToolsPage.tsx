@@ -25,6 +25,7 @@ const ARXIV_DEFAULT_EXTRA_PROMPT = [
   "Keep all numbers, percentages, units, and variable symbols unchanged.",
   "Use formal and concise academic Chinese; avoid colloquial wording.",
 ].join('\n')
+const ARXIV_DEFAULT_MODEL = 'gpt-4o-mini'
 const BIB_PRIORITY_FIELDS = [
   'author',
   'title',
@@ -279,8 +280,8 @@ export const CustomToolsPage = () => {
   const [arxivAllowCache, setArxivAllowCache] = useState(true)
   const [arxivConcurrency, setArxivConcurrency] = useState('16')
   const [arxivModelGroup, setArxivModelGroup] = useState('')
-  const [arxivModel, setArxivModel] = useState('')
-  const [arxivDefaultModel, setArxivDefaultModel] = useState('')
+  const [arxivModel, setArxivModel] = useState(ARXIV_DEFAULT_MODEL)
+  const [arxivDefaultModel, setArxivDefaultModel] = useState(ARXIV_DEFAULT_MODEL)
   const [arxivJob, setArxivJob] = useState<ArxivTranslateJob | null>(null)
   const [arxivHistory, setArxivHistory] = useState<ArxivTranslateHistoryItem[]>([])
   const [expandedHistoryJobId, setExpandedHistoryJobId] = useState<string | null>(null)
@@ -389,11 +390,12 @@ export const CustomToolsPage = () => {
   }, [arxivJob?.job_id, arxivJob?.status, selectedToolId])
 
   useEffect(() => {
-    const preferredModel = arxivDefaultModel || apiConfig.model
-    const currentModel = arxivModel || preferredModel || apiConfig.model
+    const preferredModel = arxivDefaultModel || ARXIV_DEFAULT_MODEL
+    const currentModel = arxivModel || preferredModel || apiConfig.model || ARXIV_DEFAULT_MODEL
     if (modelGroupOptions.length > 0) {
       const matchedGroup =
         modelGroupOptions.find((g) => g.models.includes(currentModel)) ||
+        modelGroupOptions.find((g) => g.models.includes(preferredModel)) ||
         modelGroupOptions.find((g) => g.models.includes(apiConfig.model))
       const nextGroup = matchedGroup?.name || modelGroupOptions[0]?.name || ''
       if (!arxivModelGroup || !modelGroupOptions.some((g) => g.name === arxivModelGroup)) {
@@ -457,7 +459,7 @@ export const CustomToolsPage = () => {
           input_text: arxivInput.trim(),
           api_key: apiConfig.api_key || undefined,
           base_url: apiConfig.base_url || undefined,
-          model: arxivModel || arxivDefaultModel || apiConfig.model || undefined,
+          model: arxivModel || arxivDefaultModel || ARXIV_DEFAULT_MODEL,
           target_language: arxivTargetLang,
           extra_prompt: arxivExtraPrompt,
           allow_cache: arxivAllowCache,
@@ -496,6 +498,23 @@ export const CustomToolsPage = () => {
   const totalChunks = Number(arxivJob?.meta?.total_chunks || 0)
   const progressPercent =
     totalChunks > 0 ? Math.min(100, Math.max(0, Math.round((translatedChunks / totalChunks) * 100))) : 0
+  const parseCostMeta = (raw: any): any | null => {
+    if (!raw) return null
+    if (typeof raw === 'string') {
+      try {
+        return JSON.parse(raw)
+      } catch {
+        return null
+      }
+    }
+    if (typeof raw === 'object') return raw
+    return null
+  }
+  const formatCost5 = (value: number): string => {
+    if (!Number.isFinite(value)) return '0.00000'
+    return Number(value).toFixed(5)
+  }
+  const currentJobCost = parseCostMeta(arxivJob?.meta?.cost_meta)
 
   const getArtifactUrl = (url: string) => {
     if (!url) return '#'
@@ -1011,6 +1030,13 @@ latexdiff --version`}
                         />
                       </div>
                     </div>
+                    {currentJobCost && (
+                      <div className="mt-3 text-xs text-gray-600">
+                        消耗 {currentJobCost.currency === 'USD' ? '$' : ''}
+                        {formatCost5(Number(currentJobCost.total_cost || 0))} (prompt {Number(currentJobCost.prompt_tokens || 0)},
+                        completion {Number(currentJobCost.completion_tokens || 0)}, total {Number(currentJobCost.total_tokens || 0)})
+                      </div>
+                    )}
                   </div>
 
                   {arxivJob.steps.length > 0 && (
@@ -1073,6 +1099,7 @@ latexdiff --version`}
               <CardContent className="space-y-2">
                 {arxivHistory.map((item) => {
                   const expanded = expandedHistoryJobId === item.job_id
+                  const itemCost = parseCostMeta(item.cost_meta)
                   const canCompare = Boolean(
                     (item.translated_pdf_url || getArtifactByName(item, 'translate_zh.pdf')?.url) &&
                       (item.original_pdf_url || item.paper_id)
@@ -1092,26 +1119,29 @@ latexdiff --version`}
                             <div className="text-[11px] text-gray-500 mt-0.5">
                               {item.status} · {new Date(item.updated_at).toLocaleString('zh-CN', { hour12: false })}
                             </div>
+                            {itemCost && (
+                              <div className="text-[11px] text-gray-500 mt-0.5">
+                                消耗 {itemCost.currency === 'USD' ? '$' : ''}{formatCost5(Number(itemCost.total_cost || 0))}
+                                {' '}· tokens {Number(itemCost.total_tokens || 0)}
+                              </div>
+                            )}
                           </div>
                           <div className="text-gray-400 text-sm shrink-0">{expanded ? '收起' : '展开'}</div>
                         </div>
                       </button>
                       {expanded && (
                         <div className="px-3 py-2 bg-white border-t border-gray-200">
-                          <div className="mb-2 flex items-center justify-end">
-                            <button
-                              type="button"
-                              className={`text-xs px-2.5 py-1 rounded border ${
-                                canCompare
-                                  ? 'border-gray-300 text-gray-700 hover:bg-gray-50'
-                                  : 'border-gray-200 text-gray-400 cursor-not-allowed'
-                              }`}
-                              disabled={!canCompare}
-                              onClick={() => handleOpenCompare(item)}
-                            >
-                              对照阅读
-                            </button>
-                          </div>
+                          {canCompare && (
+                            <div className="mb-2 flex items-center justify-start">
+                              <button
+                                type="button"
+                                className="text-xs px-2.5 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
+                                onClick={() => handleOpenCompare(item)}
+                              >
+                                对照阅读
+                              </button>
+                            </div>
+                          )}
                           {item.artifacts.length === 0 ? (
                             <div className="text-xs text-gray-500">暂无可下载产物</div>
                           ) : (

@@ -8,7 +8,7 @@ Review note:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Awaitable, Callable, List, Optional
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 import asyncio
 
 from httpx import Timeout
@@ -18,6 +18,7 @@ from app.custom_tools.arxiv_translate.splitter import normalize_llm_translated_c
 
 
 ProgressFn = Optional[Callable[[int, int], Awaitable[None]]]
+UsageFn = Optional[Callable[[Dict[str, int]], Awaitable[None]]]
 
 
 @dataclass
@@ -70,7 +71,7 @@ async def _translate_one_chunk(
     cfg: TranslatorConfig,
     extra_instruction: str,
     retries: int = 3,
-) -> str:
+) -> Tuple[str, Optional[Dict[str, int]]]:
     last_err: Optional[Exception] = None
     for attempt in range(1, retries + 1):
         try:
@@ -82,7 +83,15 @@ async def _translate_one_chunk(
             content = (resp.choices[0].message.content or "").strip()
             if not content:
                 raise RuntimeError("模型返回空文本。")
-            return normalize_llm_translated_chunk(content)
+            usage_obj = getattr(resp, "usage", None)
+            usage: Optional[Dict[str, int]] = None
+            if usage_obj is not None:
+                usage = {
+                    "prompt_tokens": int(getattr(usage_obj, "prompt_tokens", 0) or 0),
+                    "completion_tokens": int(getattr(usage_obj, "completion_tokens", 0) or 0),
+                    "total_tokens": int(getattr(usage_obj, "total_tokens", 0) or 0),
+                }
+            return normalize_llm_translated_chunk(content), usage
         except Exception as exc:
             last_err = exc
             if attempt >= retries:
@@ -97,6 +106,7 @@ async def translate_chunks(
     *,
     extra_instruction: str = "",
     on_progress: ProgressFn = None,
+    on_usage: UsageFn = None,
 ) -> List[str]:
     if not cfg.api_key:
         raise RuntimeError("缺少 API Key，无法执行论文翻译。")
@@ -122,13 +132,15 @@ async def translate_chunks(
     async def worker(index: int, chunk: str) -> None:
         nonlocal done
         async with semaphore:
-            result = await _translate_one_chunk(
+            result, usage = await _translate_one_chunk(
                 client,
                 chunk=chunk,
                 cfg=cfg,
                 extra_instruction=extra_instruction,
             )
             translated[index] = result
+            if on_usage and usage is not None:
+                await on_usage(usage)
         async with done_lock:
             done += 1
             if on_progress:
