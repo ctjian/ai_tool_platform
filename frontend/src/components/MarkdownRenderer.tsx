@@ -155,71 +155,70 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
       ol: ({ children }: any) => <ol className={styles.ol}>{children}</ol>,
       li: ({ children }: any) => <li className={styles.li}>{children}</li>,
       blockquote: ({ children }: any) => <blockquote className={styles.blockquote}>{children}</blockquote>,
-      code: ({ inline, className, children, ...props }: any) => {
+      pre: ({ children }: any) => {
+        const child = Array.isArray(children) ? children[0] : children
+        const className = child?.props?.className || ''
         const match = /language-([\w-]+)/.exec(className || '')
         const language = (match?.[1] || '').toLowerCase()
         const displayLanguage = language || 'code'
-        const code = String(children || '').replace(/\n$/, '')
+        const rawCode = child?.props?.children ?? children
+        const code = String(rawCode || '').replace(/\n$/, '')
 
-        if (!inline && language === 'mermaid') {
+        if (language === 'mermaid') {
           return <MermaidBlock chart={code} />
         }
 
-        if (!inline) {
-          return (
-            <div className={styles.codeBlockWrap}>
-              <div className={styles.codeHeader}>
-                <span>{displayLanguage}</span>
-                {enableCopyCode ? (
-                  <button
-                    type="button"
-                    onClick={() => void handleCopyCode(code)}
-                    className="inline-flex items-center gap-1 text-gray-500 hover:text-gray-700"
-                    title="复制代码"
-                  >
-                    <Copy size={14} />
-                    复制代码
-                  </button>
-                ) : null}
-              </div>
-              <div className={styles.codeBody}>
-                <SyntaxHighlighter
-                  style={a11yOneLight as any}
-                  language={language || undefined}
-                  PreTag="div"
-                  wrapLongLines
-                  codeTagProps={{
-                    style: {
-                      background: 'transparent',
-                      whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-word',
-                    },
-                  }}
-                  customStyle={{
+        return (
+          <div className={styles.codeBlockWrap}>
+            <div className={styles.codeHeader}>
+              <span>{displayLanguage}</span>
+              {enableCopyCode ? (
+                <button
+                  type="button"
+                  onClick={() => void handleCopyCode(code)}
+                  className="inline-flex items-center gap-1 text-gray-500 hover:text-gray-700"
+                  title="复制代码"
+                >
+                  <Copy size={14} />
+                  复制代码
+                </button>
+              ) : null}
+            </div>
+            <div className={styles.codeBody}>
+              <SyntaxHighlighter
+                style={a11yOneLight as any}
+                language={language || undefined}
+                PreTag="div"
+                wrapLongLines
+                codeTagProps={{
+                  style: {
                     background: 'transparent',
-                    margin: 0,
-                    padding: 0,
                     whiteSpace: 'pre-wrap',
                     wordBreak: 'break-word',
-                    overflowX: 'visible',
-                    fontSize: '13px',
-                    lineHeight: '1.6',
-                  }}
-                  {...props}
-                >
-                  {code}
-                </SyntaxHighlighter>
-              </div>
+                  },
+                }}
+                customStyle={{
+                  background: 'transparent',
+                  margin: 0,
+                  padding: 0,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  overflowX: 'visible',
+                  fontSize: '13px',
+                  lineHeight: '1.6',
+                }}
+              >
+                {code}
+              </SyntaxHighlighter>
             </div>
-          )
-        }
-
-        return (
-          <code className={styles.inlineCode} {...props}>
-            {children}
-          </code>
+          </div>
         )
       },
+      code: ({ className, children, ...props }: any) => (
+        <code className={[styles.inlineCode, className].filter(Boolean).join(' ')} {...props}>
+          {children}
+        </code>
+      ),
       a: ({ href, children }: any) => (
         <a href={href} target="_blank" rel="noreferrer" className={styles.link}>
           {children}
