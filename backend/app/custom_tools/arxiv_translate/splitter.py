@@ -622,3 +622,39 @@ def ensure_section_title_bold(text: str) -> str:
 
     out_parts.append(text[cursor:])
     return "".join(out_parts)
+
+
+_ZERO_ARG_MACRO_DEF_RE = re.compile(
+    r"""\\(?:re)?newcommand\*?\s*\{\\([A-Za-z]+)\}(?:\s*\[(\d+)\])?""",
+    re.DOTALL,
+)
+_CJK_CHAR_RE = r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]"
+
+
+def stabilize_zero_arg_macros_for_cjk(text: str) -> str:
+    """
+    Avoid xeCJK control-sequence merge issues like `\\prom的`:
+    when a zero-argument custom macro is immediately followed by CJK text,
+    rewrite to `\\prom{}的`.
+    """
+    if not text:
+        return text
+
+    macro_names: set[str] = set()
+    for m in _ZERO_ARG_MACRO_DEF_RE.finditer(text):
+        name = (m.group(1) or "").strip()
+        argc = (m.group(2) or "").strip()
+        if not name:
+            continue
+        if argc and argc != "0":
+            continue
+        macro_names.add(name)
+
+    if not macro_names:
+        return text
+
+    out = text
+    for name in sorted(macro_names, key=len, reverse=True):
+        pat = re.compile(rf"\\{re.escape(name)}(?={_CJK_CHAR_RE})")
+        out = pat.sub(rf"\\{name}{{}}", out)
+    return out

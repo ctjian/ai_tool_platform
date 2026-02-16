@@ -47,6 +47,7 @@ from app.custom_tools.arxiv_translate.splitter import (
     build_translation_segments,
     ensure_section_title_bold,
     guard_translated_segment,
+    stabilize_zero_arg_macros_for_cjk,
     strip_latex_comments,
 )
 from app.custom_tools.arxiv_translate.storage import (
@@ -483,6 +484,7 @@ def _repair_file_state(
     out_file = translated_root / rel_path
     assembled = _assemble_segments(segments)
     assembled = ensure_section_title_bold(assembled)
+    assembled = stabilize_zero_arg_macros_for_cjk(assembled)
     out_file.write_text(assembled, encoding="utf-8")
     state["repaired_segments"] = int(state.get("repaired_segments", 0)) + changed
     return True
@@ -855,6 +857,7 @@ async def _run_job(job_id: str) -> None:
             _recompute_segment_lines(state_segments)
             assembled = _assemble_segments(state_segments)
             assembled = ensure_section_title_bold(assembled)
+            assembled = stabilize_zero_arg_macros_for_cjk(assembled)
             dst_file.write_text(assembled, encoding="utf-8")
             file_states[rel.as_posix()] = {
                 "rel": rel,

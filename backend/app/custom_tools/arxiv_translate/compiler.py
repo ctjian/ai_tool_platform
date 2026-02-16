@@ -55,6 +55,11 @@ _CJK_FALLBACK_BLOCK = rf"""
 """.strip()
 
 
+_INPUTENC_RE = re.compile(
+    r"(?m)^[ \t]*\\usepackage(?:\[[^\]]*\])?\{inputenc\}[ \t]*\n?"
+)
+
+
 def _insert_after_documentclass(text: str, block: str) -> str:
     m = re.search(r"\\documentclass(?:\[[^\]]*\])?\{[^}]+\}", text)
     if not m:
@@ -92,6 +97,11 @@ def ensure_ctex_support(main_tex_path: Path) -> bool:
 
     if "{url}" not in text:
         text = _insert_after_ctex_package(text, "\\usepackage{url}")
+        changed = True
+
+    # xelatex/ctex 下 inputenc 会报错并导致返回码非 0，触发无意义重试
+    if _INPUTENC_RE.search(text):
+        text = _INPUTENC_RE.sub("", text)
         changed = True
 
     if changed:
@@ -145,7 +155,8 @@ def _bbl_has_entries(bbl_file: Path) -> bool:
 
 
 _ERROR_RE = re.compile(
-    r"(?m)^(?:\./)?(?P<file>[^\n:]+?\.tex):(?P<line>\d+):\s*(?P<msg>.+)$"
+    r"(?m)^(?:\./)?(?P<file>[^\n:]+?\.(?:tex|sty|cls|bst|bib)):"
+    r"(?P<line>\d+):\s*(?P<msg>.+)$"
 )
 
 
