@@ -2,9 +2,12 @@
 // - 新增“Arxiv论文精细翻译”自定义工具页逻辑（提交任务、轮询状态、下载产物）。
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, Input, Button, Loading, addToast } from '../components/ui'
+import { Document, Page, pdfjs } from 'react-pdf'
 import apiClient from '../api/client'
 import { useAppStore } from '../store/app'
 import { ArxivTranslateHistoryItem, ArxivTranslateJob } from '../types/api'
+import 'react-pdf/dist/Page/AnnotationLayer.css'
+import 'react-pdf/dist/Page/TextLayer.css'
 
 interface CustomTool {
   id: string
@@ -15,6 +18,18 @@ interface CustomTool {
 
 interface DemoResponse {
   result: number
+}
+
+interface CitationHoverState {
+  key: string
+  text: string
+  x: number
+  y: number
+}
+
+interface PdfLinkCitationMeta {
+  key: string
+  text: string
 }
 
 const ARXIV_DEFAULT_EXTRA_PROMPT = [
@@ -39,6 +54,12 @@ const BIB_PRIORITY_FIELDS = [
   'doi'
 ]
 const BIB_IGNORED_FIELDS = new Set(['bibsource', 'timestamp'])
+const DEBUG_CITATION_HOVER = false
+
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url,
+).toString()
 
 interface BibField {
   name: string
@@ -204,35 +225,6 @@ const reorderBibtexFields = (bibtex: string) => {
   return `@${entryType}{${citeKey},\n${lines.join('\n')}\n}`
 }
 
-let pdfJsLibPromise: Promise<any> | null = null
-
-const loadPdfJsLib = async () => {
-  if ((window as any).pdfjsLib) {
-    return (window as any).pdfjsLib
-  }
-  if (pdfJsLibPromise) {
-    return pdfJsLibPromise
-  }
-  pdfJsLibPromise = new Promise((resolve, reject) => {
-    const script = document.createElement('script')
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
-    script.async = true
-    script.onload = () => {
-      const lib = (window as any).pdfjsLib
-      if (!lib) {
-        reject(new Error('pdf.js 加载失败'))
-        return
-      }
-      lib.GlobalWorkerOptions.workerSrc =
-        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
-      resolve(lib)
-    }
-    script.onerror = () => reject(new Error('pdf.js 脚本加载失败'))
-    document.body.appendChild(script)
-  })
-  return pdfJsLibPromise
-}
-
 export const CustomToolsPage = () => {
   const {
     apiConfig,
@@ -288,14 +280,25 @@ export const CustomToolsPage = () => {
   const [compareOpen, setCompareOpen] = useState(false)
   const [compareLeftUrl, setCompareLeftUrl] = useState('')
   const [compareRightUrl, setCompareRightUrl] = useState('')
+  const [compareCitationHover, setCompareCitationHover] = useState<CitationHoverState | null>(null)
+  const [compareCitationPinned, setCompareCitationPinned] = useState<{ key: string; text: string } | null>(null)
   const [compareTitle, setCompareTitle] = useState('')
   const [compareError, setCompareError] = useState('')
   const [compareLeftLoading, setCompareLeftLoading] = useState(false)
   const [compareRightLoading, setCompareRightLoading] = useState(false)
+  const [compareLeftPages, setCompareLeftPages] = useState(0)
+  const [compareRightPages, setCompareRightPages] = useState(0)
+  const [compareLeftPageWidth, setCompareLeftPageWidth] = useState(640)
+  const [compareRightPageWidth, setCompareRightPageWidth] = useState(640)
   const leftPdfRef = useRef<HTMLDivElement | null>(null)
   const rightPdfRef = useRef<HTMLDivElement | null>(null)
   const syncLockRef = useRef(false)
-  const renderTokenRef = useRef(0)
+  const hoverHideTimerRef = useRef<number | null>(null)
+  const hoverPanelRef = useRef<HTMLDivElement | null>(null)
+  const compareLinkCitationsRef = useRef<{
+    left: Record<string, PdfLinkCitationMeta>
+    right: Record<string, PdfLinkCitationMeta>
+  }>({ left: {}, right: {} })
 
   const selectedTool = tools.find((t) => t.id === selectedToolId) || null
   const modelGroupOptions = availableModelGroups || []
@@ -317,6 +320,7 @@ export const CustomToolsPage = () => {
       })),
     [bibCandidates]
   )
+  const comparePdfOptions = useMemo(() => ({ withCredentials: false }), [])
 
   const refreshArxivHistory = async () => {
     try {
@@ -525,42 +529,6 @@ export const CustomToolsPage = () => {
   const getArtifactByName = (item: ArxivTranslateHistoryItem, name: string) =>
     (item.artifacts || []).find((a) => a.name === name)
 
-  const renderPdfToPane = async (url: string, container: HTMLDivElement, token: number) => {
-    const lib = await loadPdfJsLib()
-    if (token !== renderTokenRef.current) return
-
-    container.innerHTML = ''
-    const content = document.createElement('div')
-    content.className = 'space-y-2 p-2'
-    container.appendChild(content)
-
-    const loadingTask = lib.getDocument({ url, withCredentials: false })
-    const pdf = await loadingTask.promise
-    if (token !== renderTokenRef.current) return
-
-    const paneWidth = Math.max(320, container.clientWidth - 16)
-    for (let pageNo = 1; pageNo <= pdf.numPages; pageNo += 1) {
-      if (token !== renderTokenRef.current) return
-      const page = await pdf.getPage(pageNo)
-      const viewport = page.getViewport({ scale: 1 })
-      const scale = paneWidth / viewport.width
-      const scaled = page.getViewport({ scale })
-      const dpr = Math.max(1, window.devicePixelRatio || 1)
-
-      const canvas = document.createElement('canvas')
-      canvas.width = Math.floor(scaled.width * dpr)
-      canvas.height = Math.floor(scaled.height * dpr)
-      canvas.style.width = `${scaled.width}px`
-      canvas.style.height = `${scaled.height}px`
-      canvas.className = 'mx-auto bg-white shadow-sm'
-      const ctx = canvas.getContext('2d')
-      if (!ctx) continue
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      await page.render({ canvasContext: ctx, viewport: scaled }).promise
-      content.appendChild(canvas)
-    }
-  }
-
   const handleOpenCompare = (item: ArxivTranslateHistoryItem) => {
     const translatedPdf = item.translated_pdf_url || getArtifactByName(item, 'translate_zh.pdf')?.url || ''
     const originalPdf =
@@ -573,7 +541,221 @@ export const CustomToolsPage = () => {
     setCompareTitle(item.task_name || `arXiv:${item.paper_id || item.job_id}`)
     setCompareLeftUrl(getArtifactUrl(originalPdf))
     setCompareRightUrl(getArtifactUrl(translatedPdf))
+    compareLinkCitationsRef.current = { left: {}, right: {} }
+    setCompareCitationHover(null)
+    setCompareCitationPinned(null)
     setCompareOpen(true)
+  }
+
+  const clearHoverHideTimer = () => {
+    if (hoverHideTimerRef.current !== null) {
+      window.clearTimeout(hoverHideTimerRef.current)
+      hoverHideTimerRef.current = null
+    }
+  }
+
+  const scheduleHoverHide = () => {
+    clearHoverHideTimer()
+    if (compareCitationPinned) return
+    hoverHideTimerRef.current = window.setTimeout(() => {
+      setCompareCitationHover(null)
+    }, 400)
+  }
+
+  const calcTooltipPosition = (x: number, y: number) => {
+    const margin = 12
+    const estimatedWidth = 520
+    const estimatedHeight = 210
+    const vw = window.innerWidth || 1280
+    const vh = window.innerHeight || 720
+    let left = x + 12
+    let top = y + 12
+    if (left + estimatedWidth > vw - margin) {
+      left = Math.max(margin, x - estimatedWidth - 12)
+    }
+    if (top + estimatedHeight > vh - margin) {
+      top = Math.max(margin, vh - estimatedHeight - margin)
+    }
+    return { left, top }
+  }
+
+  const normalizeText = (value: string) => value.replace(/\s+/g, ' ').trim()
+
+  const resolveDestination = async (pdfDoc: any, dest: any): Promise<{ pageNumber: number; y: number | null } | null> => {
+    let target = dest
+    if (!target) return null
+    if (typeof target === 'string') {
+      target = await pdfDoc.getDestination(target)
+    }
+    if (!Array.isArray(target) || target.length === 0) return null
+    const pageRef = target[0]
+    let pageIndex = -1
+    if (typeof pageRef === 'number') {
+      pageIndex = pageRef
+    } else if (pageRef && typeof pageRef === 'object') {
+      try {
+        pageIndex = await pdfDoc.getPageIndex(pageRef)
+      } catch {
+        return null
+      }
+    }
+    if (!Number.isFinite(pageIndex) || pageIndex < 0) return null
+    const yRaw = target[3]
+    const y = typeof yRaw === 'number' && Number.isFinite(yRaw) ? yRaw : null
+    return { pageNumber: pageIndex + 1, y }
+  }
+
+  const pageTextCacheRef = useRef<{
+    left: Map<number, Array<{ str: string; x: number; y: number }>>
+    right: Map<number, Array<{ str: string; x: number; y: number }>>
+  }>({ left: new Map(), right: new Map() })
+
+  const readPageTextItems = async (
+    side: 'left' | 'right',
+    pdfDoc: any,
+    pageNumber: number,
+  ): Promise<Array<{ str: string; x: number; y: number }>> => {
+    const cache = pageTextCacheRef.current[side]
+    const cached = cache.get(pageNumber)
+    if (cached) return cached
+    const page = await pdfDoc.getPage(pageNumber)
+    const textContent = await page.getTextContent()
+    const items = (textContent?.items || [])
+      .map((item: any) => {
+        const str = typeof item?.str === 'string' ? normalizeText(item.str) : ''
+        const tx = item?.transform
+        if (!str || !Array.isArray(tx) || tx.length < 6) return null
+        return { str, x: Number(tx[4]) || 0, y: Number(tx[5]) || 0 }
+      })
+      .filter(Boolean) as Array<{ str: string; x: number; y: number }>
+    const sorted = items.sort((a, b) => {
+      if (Math.abs(a.y - b.y) > 1.5) return b.y - a.y
+      return a.x - b.x
+    })
+    cache.set(pageNumber, sorted)
+    return sorted
+  }
+
+  const extractCitationSnippet = async (
+    side: 'left' | 'right',
+    pdfDoc: any,
+    dest: { pageNumber: number; y: number | null },
+  ): Promise<string> => {
+    const items = await readPageTextItems(side, pdfDoc, dest.pageNumber)
+    if (items.length === 0) return ''
+    let pivot = Math.min(10, items.length - 1)
+    if (dest.y !== null) {
+      let best = 0
+      let bestDelta = Number.MAX_SAFE_INTEGER
+      for (let i = 0; i < items.length; i += 1) {
+        const delta = Math.abs(items[i].y - dest.y)
+        if (delta < bestDelta) {
+          bestDelta = delta
+          best = i
+        }
+      }
+      pivot = best
+    }
+    const windowItems = items.slice(Math.max(0, pivot - 10), Math.min(items.length, pivot + 48))
+    const lineTolerance = 2.5
+    const lines: Array<{ y: number; parts: string[] }> = []
+    for (const it of windowItems) {
+      const last = lines[lines.length - 1]
+      if (!last || Math.abs(last.y - it.y) > lineTolerance) {
+        lines.push({ y: it.y, parts: [it.str] })
+      } else {
+        last.parts.push(it.str)
+      }
+    }
+
+    const text = lines
+      .map((line) => line.parts.join(' ').replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+    return text.slice(0, 900)
+  }
+
+  const buildPdfLinkCitationMap = async (
+    side: 'left' | 'right',
+    pdfDoc: any,
+  ): Promise<Record<string, PdfLinkCitationMeta>> => {
+    const map: Record<string, PdfLinkCitationMeta> = {}
+    for (let pageNumber = 1; pageNumber <= pdfDoc.numPages; pageNumber += 1) {
+      const page = await pdfDoc.getPage(pageNumber)
+      const annotations = await page.getAnnotations()
+      for (let idx = 0; idx < annotations.length; idx += 1) {
+        const ann = annotations[idx]
+        if (ann?.subtype !== 'Link') continue
+        if (ann?.url) continue
+        const resolvedDest = await resolveDestination(pdfDoc, ann?.dest)
+        if (!resolvedDest) continue
+        const snippet = await extractCitationSnippet(side, pdfDoc, resolvedDest)
+        if (!snippet) continue
+        const annId = typeof ann?.id === 'string' ? ann.id : ''
+        const key = `p${resolvedDest.pageNumber}`
+        const text = snippet
+        map[`${pageNumber}:@${idx}`] = { key, text }
+        if (annId) {
+          map[`${pageNumber}:${annId}`] = { key, text }
+        }
+      }
+    }
+    return map
+  }
+
+  const resolveCitationFromEventTarget = (target: EventTarget | null): PdfLinkCitationMeta | null => {
+    const el = target as HTMLElement | null
+    if (!el) return null
+    const section = el.closest('.react-pdf__Page__annotations section') as HTMLElement | null
+    if (!section) return null
+    const pageContainer = section.closest('[data-compare-page-number]') as HTMLElement | null
+    const sideContainer = section.closest('[data-compare-side]') as HTMLElement | null
+    const pageNumber = Number(pageContainer?.dataset.comparePageNumber || 0)
+    const sideRaw = sideContainer?.dataset.compareSide
+    const side = sideRaw === 'left' || sideRaw === 'right' ? sideRaw : ''
+    if (!pageNumber || !side) return null
+
+    const sideMap = compareLinkCitationsRef.current[side]
+    const annId = section.getAttribute('data-annotation-id') || ''
+    const annSiblings = Array.from(section.parentElement?.querySelectorAll('section') || [])
+    const annIndex = annSiblings.indexOf(section)
+    const byId = annId ? sideMap[`${pageNumber}:${annId}`] : null
+    const byIndex = annIndex >= 0 ? sideMap[`${pageNumber}:@${annIndex}`] : null
+    const resolved = byId || byIndex || null
+    if (DEBUG_CITATION_HOVER && !resolved) {
+      console.log('[citation-hover-unmatched-link]', { side, pageNumber, annId, annIndex })
+    }
+    return resolved
+  }
+
+  const handleComparePaneMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
+    const resolved = resolveCitationFromEventTarget(event.target)
+    if (!resolved) {
+      if (!compareCitationPinned) {
+        scheduleHoverHide()
+      }
+      return
+    }
+    clearHoverHideTimer()
+    const pos = calcTooltipPosition(event.clientX, event.clientY)
+    setCompareCitationHover({
+      key: resolved.key,
+      text: resolved.text,
+      x: pos.left,
+      y: pos.top,
+    })
+  }
+
+  const handleComparePaneMouseLeave = () => {
+    scheduleHoverHide()
+  }
+
+  const handleComparePaneClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    const resolved = resolveCitationFromEventTarget(event.target)
+    if (resolved) return
+    clearHoverHideTimer()
+    setCompareCitationHover(null)
   }
 
   const syncPaneScroll = (from: HTMLDivElement | null, to: HTMLDivElement | null) => {
@@ -589,36 +771,81 @@ export const CustomToolsPage = () => {
   }
 
   useEffect(() => {
-    if (!compareOpen) return
-    if (!leftPdfRef.current || !rightPdfRef.current) return
-    if (!compareLeftUrl || !compareRightUrl) return
-
-    const token = renderTokenRef.current + 1
-    renderTokenRef.current = token
+    if (!compareOpen || !compareLeftUrl || !compareRightUrl) return
     setCompareError('')
     setCompareLeftLoading(true)
     setCompareRightLoading(true)
-
-    renderPdfToPane(compareLeftUrl, leftPdfRef.current, token)
-      .catch(() => {
-        setCompareError('原文 PDF 加载失败，请稍后重试。')
-      })
-      .finally(() => {
-        if (token === renderTokenRef.current) setCompareLeftLoading(false)
-      })
-
-    renderPdfToPane(compareRightUrl, rightPdfRef.current, token)
-      .catch(() => {
-        setCompareError((prev) => prev || '译文 PDF 加载失败，请稍后重试。')
-      })
-      .finally(() => {
-        if (token === renderTokenRef.current) setCompareRightLoading(false)
-      })
-
-    return () => {
-      renderTokenRef.current += 1
-    }
+    setCompareLeftPages(0)
+    setCompareRightPages(0)
+    compareLinkCitationsRef.current = { left: {}, right: {} }
+    pageTextCacheRef.current = { left: new Map(), right: new Map() }
+    setCompareCitationHover(null)
+    setCompareCitationPinned(null)
   }, [compareOpen, compareLeftUrl, compareRightUrl])
+
+  useEffect(() => () => clearHoverHideTimer(), [])
+
+  useEffect(() => {
+    if (!compareOpen) return
+
+    const updatePaneWidths = () => {
+      const leftWidth = leftPdfRef.current
+        ? Math.max(320, Math.floor(leftPdfRef.current.clientWidth - 16))
+        : 0
+      const rightWidth = rightPdfRef.current
+        ? Math.max(320, Math.floor(rightPdfRef.current.clientWidth - 16))
+        : 0
+      if (leftWidth > 0) setCompareLeftPageWidth(leftWidth)
+      if (rightWidth > 0) setCompareRightPageWidth(rightWidth)
+    }
+
+    updatePaneWidths()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updatePaneWidths)
+      return () => window.removeEventListener('resize', updatePaneWidths)
+    }
+
+    const observer = new ResizeObserver(updatePaneWidths)
+    if (leftPdfRef.current) observer.observe(leftPdfRef.current)
+    if (rightPdfRef.current) observer.observe(rightPdfRef.current)
+    return () => observer.disconnect()
+  }, [compareOpen])
+
+  const handleLeftPdfLoadSuccess = async (pdfDoc: any) => {
+    setCompareLeftPages(Number(pdfDoc?.numPages || 0))
+    try {
+      compareLinkCitationsRef.current.left = await buildPdfLinkCitationMap('left', pdfDoc)
+      if (DEBUG_CITATION_HOVER) {
+        console.log('[citation-map-built]', { side: 'left', count: Object.keys(compareLinkCitationsRef.current.left).length })
+      }
+    } catch {
+      compareLinkCitationsRef.current.left = {}
+    }
+    setCompareLeftLoading(false)
+  }
+
+  const handleRightPdfLoadSuccess = async (pdfDoc: any) => {
+    setCompareRightPages(Number(pdfDoc?.numPages || 0))
+    try {
+      compareLinkCitationsRef.current.right = await buildPdfLinkCitationMap('right', pdfDoc)
+      if (DEBUG_CITATION_HOVER) {
+        console.log('[citation-map-built]', { side: 'right', count: Object.keys(compareLinkCitationsRef.current.right).length })
+      }
+    } catch {
+      compareLinkCitationsRef.current.right = {}
+    }
+    setCompareRightLoading(false)
+  }
+
+  const handleLeftPdfLoadError = () => {
+    setCompareLeftLoading(false)
+    setCompareError('原文 PDF 加载失败，请稍后重试。')
+  }
+
+  const handleRightPdfLoadError = () => {
+    setCompareRightLoading(false)
+    setCompareError((prev) => prev || '译文 PDF 加载失败，请稍后重试。')
+  }
 
   const getStepStatusUi = (status: string) => {
     if (status === 'done') {
@@ -1189,23 +1416,138 @@ latexdiff --version`}
               <div className="px-3 py-2 text-xs font-medium text-gray-700 border-b border-gray-200">原文 PDF</div>
               <div
                 ref={leftPdfRef}
+                data-compare-side="left"
                 onScroll={() => syncPaneScroll(leftPdfRef.current, rightPdfRef.current)}
+                onMouseMove={handleComparePaneMouseMove}
+                onMouseLeave={handleComparePaneMouseLeave}
+                onClickCapture={handleComparePaneClick}
                 className="flex-1 min-h-0 overflow-auto bg-gray-100"
-              />
+              >
+                {compareLeftUrl && (
+                  <div className="space-y-3 p-2">
+                    <Document
+                      file={compareLeftUrl}
+                      options={comparePdfOptions}
+                      onLoadSuccess={handleLeftPdfLoadSuccess}
+                      onLoadError={handleLeftPdfLoadError}
+                      loading={null}
+                      error={null}
+                      noData={null}
+                    >
+                      {Array.from({ length: compareLeftPages }).map((_, index) => (
+                        <div
+                          key={`left-page-${index + 1}`}
+                          data-compare-page-number={index + 1}
+                          className="mx-auto bg-white border border-gray-200 rounded-sm shadow-sm overflow-hidden"
+                        >
+                          <Page
+                            pageNumber={index + 1}
+                            width={compareLeftPageWidth}
+                            renderTextLayer
+                            renderAnnotationLayer
+                            loading={null}
+                          />
+                        </div>
+                      ))}
+                    </Document>
+                  </div>
+                )}
+              </div>
               {compareLeftLoading && <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-200">原文加载中...</div>}
             </div>
             <div className="bg-white rounded-lg border border-gray-200 overflow-hidden flex flex-col min-h-0">
               <div className="px-3 py-2 text-xs font-medium text-gray-700 border-b border-gray-200">译文 PDF</div>
               <div
                 ref={rightPdfRef}
+                data-compare-side="right"
                 onScroll={() => syncPaneScroll(rightPdfRef.current, leftPdfRef.current)}
+                onMouseMove={handleComparePaneMouseMove}
+                onMouseLeave={handleComparePaneMouseLeave}
+                onClickCapture={handleComparePaneClick}
                 className="flex-1 min-h-0 overflow-auto bg-gray-100"
-              />
+              >
+                {compareRightUrl && (
+                  <div className="space-y-3 p-2">
+                    <Document
+                      file={compareRightUrl}
+                      options={comparePdfOptions}
+                      onLoadSuccess={handleRightPdfLoadSuccess}
+                      onLoadError={handleRightPdfLoadError}
+                      loading={null}
+                      error={null}
+                      noData={null}
+                    >
+                      {Array.from({ length: compareRightPages }).map((_, index) => (
+                        <div
+                          key={`right-page-${index + 1}`}
+                          data-compare-page-number={index + 1}
+                          className="mx-auto bg-white border border-gray-200 rounded-sm shadow-sm overflow-hidden"
+                        >
+                          <Page
+                            pageNumber={index + 1}
+                            width={compareRightPageWidth}
+                            renderTextLayer
+                            renderAnnotationLayer
+                            loading={null}
+                          />
+                        </div>
+                      ))}
+                    </Document>
+                  </div>
+                )}
+              </div>
               {compareRightLoading && <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-200">译文加载中...</div>}
             </div>
           </div>
           {compareError && (
             <div className="px-4 py-2 bg-white border-t border-gray-200 text-xs text-red-600">{compareError}</div>
+          )}
+          {compareCitationHover && (
+            <div
+              ref={hoverPanelRef}
+              onMouseEnter={clearHoverHideTimer}
+              onMouseLeave={scheduleHoverHide}
+              className="fixed z-[70] w-[520px] max-w-[calc(100vw-24px)] rounded border border-emerald-300 bg-emerald-50 px-2.5 py-2 text-xs text-emerald-900 shadow-lg pointer-events-auto"
+              style={{ left: compareCitationHover.x, top: compareCitationHover.y }}
+            >
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <div className="font-semibold">{compareCitationHover.key}</div>
+                <button
+                  type="button"
+                  className="text-[11px] px-1.5 py-0.5 rounded border border-emerald-400 text-emerald-800 hover:bg-emerald-100"
+                  onClick={() => {
+                    setCompareCitationPinned({ key: compareCitationHover.key, text: compareCitationHover.text })
+                    setCompareCitationHover(null)
+                    clearHoverHideTimer()
+                  }}
+                >
+                  固定
+                </button>
+              </div>
+              <div className="max-h-72 overflow-auto whitespace-pre-wrap break-words select-text">
+                {compareCitationHover.text}
+              </div>
+            </div>
+          )}
+          {compareCitationPinned && (
+            <div className="fixed right-4 bottom-4 z-[71] max-w-xl rounded-lg border border-emerald-300 bg-white shadow-xl">
+              <div className="flex items-center justify-between gap-2 border-b border-emerald-200 px-3 py-2">
+                <div className="text-xs font-semibold text-emerald-800 break-all">{compareCitationPinned.key}</div>
+                <button
+                  type="button"
+                  className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                  onClick={() => {
+                    setCompareCitationPinned(null)
+                    setCompareCitationHover(null)
+                  }}
+                >
+                  关闭
+                </button>
+              </div>
+              <div className="px-3 py-2 text-xs text-gray-700 max-h-80 overflow-auto whitespace-pre-wrap break-words select-text">
+                {compareCitationPinned.text}
+              </div>
+            </div>
           )}
         </div>
       )}
