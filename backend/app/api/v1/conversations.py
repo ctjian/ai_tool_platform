@@ -93,12 +93,15 @@ async def upsert_system_prompt(
             Message.conversation_id == conversation_id,
             Message.role == "system",
         )
-        .order_by(Message.created_at.desc())
-        .limit(1)
+        .order_by(Message.created_at.desc(), Message.id.desc())
     )
-    system_msg = result.scalar_one_or_none()
-    if system_msg:
-        system_msg.content = content
+    system_messages = list(result.scalars().all())
+    if system_messages:
+        system_msg = system_messages[0]
+        system_msg.content = trimmed
+        duplicate_ids = [msg.id for msg in system_messages[1:]]
+        if duplicate_ids:
+            await db.execute(delete(Message).where(Message.id.in_(duplicate_ids)))
         await db.commit()
         await db.refresh(system_msg)
         return system_msg
@@ -107,7 +110,7 @@ async def upsert_system_prompt(
         db,
         conversation_id=conversation_id,
         role="system",
-        content=content,
+        content=trimmed,
         images=None,
         cost_meta=None,
         thinking=None,
@@ -156,7 +159,11 @@ async def get_conversation(
 
     # 构建响应
     messages = []
-    for msg in conversation.messages:
+    ordered_messages = sorted(
+        conversation.messages,
+        key=lambda msg: (msg.created_at, msg.id),
+    )
+    for msg in ordered_messages:
         # 解析图片JSON
         images = None
         if msg.images:

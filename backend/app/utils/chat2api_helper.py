@@ -45,7 +45,7 @@ async def stream_chat2api_completion(
         "Authorization": f"Bearer {access_token}",
     }
 
-    timeout = httpx.Timeout(60.0, read=None)
+    timeout = httpx.Timeout(15.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         async with client.stream("POST", url, headers=headers, json=payload) as resp:
             if resp.status_code != 200:

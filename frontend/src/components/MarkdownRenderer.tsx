@@ -84,10 +84,10 @@ const normalizeLatexContent = (content: string): string => {
 }
 
 const articleStyles = {
-  h1: 'mb-3 mt-6 text-3xl font-semibold tracking-tight text-gray-900 first:mt-0',
-  h2: 'mb-2 mt-5 border-b border-gray-200 pb-1 text-2xl font-semibold text-gray-900',
-  h3: 'mb-2 mt-4 text-xl font-semibold text-gray-900',
-  h4: 'mb-2 mt-4 text-lg font-semibold text-gray-900',
+  h1: 'mb-3 mt-6 text-2xl font-semibold tracking-tight text-gray-900 first:mt-0',
+  h2: 'mb-2 mt-5 text-xl border-b border-gray-200 pb-1 font-semibold text-gray-900',
+  h3: 'mb-2 mt-4 text-lg font-semibold text-gray-900',
+  h4: 'mb-2 mt-4 text-base font-semibold text-gray-900',
   p: 'my-3 leading-7 text-gray-800',
   ul: 'my-3 list-disc space-y-1.5 pl-6 text-gray-800 marker:text-gray-500',
   ol: 'my-3 list-decimal space-y-1.5 pl-6 text-gray-800 marker:text-gray-500',

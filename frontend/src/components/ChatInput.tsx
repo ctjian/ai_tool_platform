@@ -219,7 +219,7 @@ function ChatInput({
 
   return (
     <div className="relative">
-      <div className={`w-full border border-gray-300 bg-white rounded-2xl ${containerShadowClass}`}>
+      <div className={`w-full border border-gray-300 bg-white rounded-[999px] ${containerShadowClass}`}>
         {/* 图片预览区域（内嵌输入框） */}
         {images.length > 0 && (
           <div className="flex gap-2 p-3 pb-0 flex-wrap">

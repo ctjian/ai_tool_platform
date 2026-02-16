@@ -155,7 +155,7 @@ class CRUDMessage:
         result = await db.execute(
             select(Message)
             .where(Message.conversation_id == conversation_id)
-            .order_by(Message.created_at)
+            .order_by(Message.created_at, Message.id)
         )
         return list(result.scalars().all())
     
