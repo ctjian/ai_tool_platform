@@ -47,7 +47,7 @@ echo ""
 
 # 在后台启动后端
 mkdir -p logs
-nohup uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 > logs/backend.log 2>&1 &
+nohup uvicorn app.main:app --reload --host :: --port 8000 > logs/backend.log 2>&1 &
 BACKEND_PID=$!
 echo "后端PID: $BACKEND_PID"
 
