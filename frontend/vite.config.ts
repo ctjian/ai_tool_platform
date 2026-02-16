@@ -9,11 +9,11 @@ export default defineConfig({
     allowedHosts: ['home.jct.work'],
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: 'http://127.0.0.1:20080',
         changeOrigin: true,
       },
       '/custom-tools-files': {
-        target: 'http://127.0.0.1:8000',
+        target: 'http://127.0.0.1:20080',
         changeOrigin: true,
       },
     },
