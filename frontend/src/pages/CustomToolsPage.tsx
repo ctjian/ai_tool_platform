@@ -55,6 +55,9 @@ const BIB_PRIORITY_FIELDS = [
 ]
 const BIB_IGNORED_FIELDS = new Set(['bibsource', 'timestamp'])
 const DEBUG_CITATION_HOVER = false
+const COMPARE_ZOOM_MIN = 0.6
+const COMPARE_ZOOM_MAX = 2.4
+const COMPARE_ZOOM_STEP = 0.1
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -290,6 +293,8 @@ export const CustomToolsPage = () => {
   const [compareRightPages, setCompareRightPages] = useState(0)
   const [compareLeftPageWidth, setCompareLeftPageWidth] = useState(640)
   const [compareRightPageWidth, setCompareRightPageWidth] = useState(640)
+  const [compareZoom, setCompareZoom] = useState(1)
+  const [compareScrollSync, setCompareScrollSync] = useState(true)
   const leftPdfRef = useRef<HTMLDivElement | null>(null)
   const rightPdfRef = useRef<HTMLDivElement | null>(null)
   const syncLockRef = useRef(false)
@@ -321,6 +326,24 @@ export const CustomToolsPage = () => {
     [bibCandidates]
   )
   const comparePdfOptions = useMemo(() => ({ withCredentials: false }), [])
+  const compareZoomPercent = Math.round(compareZoom * 100)
+  const compareLeftRenderWidth = Math.max(220, Math.floor(compareLeftPageWidth * compareZoom))
+  const compareRightRenderWidth = Math.max(220, Math.floor(compareRightPageWidth * compareZoom))
+
+  const clampCompareZoom = (value: number) => {
+    const clamped = Math.min(COMPARE_ZOOM_MAX, Math.max(COMPARE_ZOOM_MIN, value))
+    return Number(clamped.toFixed(2))
+  }
+
+  const adjustCompareZoom = (delta: number) => {
+    setCompareZoom((prev) => clampCompareZoom(prev + delta))
+  }
+
+  const handleComparePaneWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (!event.ctrlKey && !event.metaKey) return
+    event.preventDefault()
+    adjustCompareZoom(event.deltaY < 0 ? COMPARE_ZOOM_STEP : -COMPARE_ZOOM_STEP)
+  }
 
   const refreshArxivHistory = async () => {
     try {
@@ -544,6 +567,8 @@ export const CustomToolsPage = () => {
     compareLinkCitationsRef.current = { left: {}, right: {} }
     setCompareCitationHover(null)
     setCompareCitationPinned(null)
+    setCompareZoom(1)
+    setCompareScrollSync(true)
     setCompareOpen(true)
   }
 
@@ -1403,13 +1428,52 @@ latexdiff --version`}
               <div className="font-semibold text-gray-900 truncate">对照阅读</div>
               <div className="text-xs text-gray-500 truncate">{compareTitle}</div>
             </div>
-            <button
-              type="button"
-              className="px-3 py-1.5 rounded border border-gray-300 text-sm text-gray-700 hover:bg-gray-50"
-              onClick={() => setCompareOpen(false)}
-            >
-              关闭
-            </button>
+            <div className="flex items-center gap-2">
+              <span className="hidden sm:inline text-xs text-gray-500">Ctrl/Cmd + 滚轮缩放</span>
+              <button
+                type="button"
+                className={`px-2.5 py-1 rounded border text-xs ${
+                  compareScrollSync
+                    ? 'border-emerald-400 bg-emerald-50 text-emerald-700'
+                    : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                }`}
+                onClick={() => setCompareScrollSync((prev) => !prev)}
+                title={compareScrollSync ? '关闭联动滚动' : '开启联动滚动'}
+              >
+                联动滚动：{compareScrollSync ? '开' : '关'}
+              </button>
+              <button
+                type="button"
+                className="px-2 py-1 rounded border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                onClick={() => adjustCompareZoom(-COMPARE_ZOOM_STEP)}
+                disabled={compareZoom <= COMPARE_ZOOM_MIN}
+              >
+                -
+              </button>
+              <button
+                type="button"
+                className="px-2.5 py-1 rounded border border-gray-300 text-xs text-gray-700 hover:bg-gray-50"
+                onClick={() => setCompareZoom(1)}
+                title="重置缩放"
+              >
+                {compareZoomPercent}%
+              </button>
+              <button
+                type="button"
+                className="px-2 py-1 rounded border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                onClick={() => adjustCompareZoom(COMPARE_ZOOM_STEP)}
+                disabled={compareZoom >= COMPARE_ZOOM_MAX}
+              >
+                +
+              </button>
+              <button
+                type="button"
+                className="px-3 py-1.5 rounded border border-gray-300 text-sm text-gray-700 hover:bg-gray-50"
+                onClick={() => setCompareOpen(false)}
+              >
+                关闭
+              </button>
+            </div>
           </div>
           <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-0 lg:gap-2 p-2">
             <div className="bg-white rounded-lg border border-gray-200 overflow-hidden flex flex-col min-h-0">
@@ -1417,14 +1481,18 @@ latexdiff --version`}
               <div
                 ref={leftPdfRef}
                 data-compare-side="left"
-                onScroll={() => syncPaneScroll(leftPdfRef.current, rightPdfRef.current)}
+                onScroll={() => {
+                  if (!compareScrollSync) return
+                  syncPaneScroll(leftPdfRef.current, rightPdfRef.current)
+                }}
                 onMouseMove={handleComparePaneMouseMove}
                 onMouseLeave={handleComparePaneMouseLeave}
                 onClickCapture={handleComparePaneClick}
+                onWheel={handleComparePaneWheel}
                 className="flex-1 min-h-0 overflow-auto bg-gray-100"
               >
                 {compareLeftUrl && (
-                  <div className="space-y-3 p-2">
+                  <div className="space-y-3 p-2 w-max min-w-full">
                     <Document
                       file={compareLeftUrl}
                       options={comparePdfOptions}
@@ -1438,11 +1506,11 @@ latexdiff --version`}
                         <div
                           key={`left-page-${index + 1}`}
                           data-compare-page-number={index + 1}
-                          className="mx-auto bg-white border border-gray-200 rounded-sm shadow-sm overflow-hidden"
+                          className="w-fit mx-auto bg-white border border-gray-200 rounded-sm shadow-sm"
                         >
                           <Page
                             pageNumber={index + 1}
-                            width={compareLeftPageWidth}
+                            width={compareLeftRenderWidth}
                             renderTextLayer
                             renderAnnotationLayer
                             loading={null}
@@ -1460,14 +1528,18 @@ latexdiff --version`}
               <div
                 ref={rightPdfRef}
                 data-compare-side="right"
-                onScroll={() => syncPaneScroll(rightPdfRef.current, leftPdfRef.current)}
+                onScroll={() => {
+                  if (!compareScrollSync) return
+                  syncPaneScroll(rightPdfRef.current, leftPdfRef.current)
+                }}
                 onMouseMove={handleComparePaneMouseMove}
                 onMouseLeave={handleComparePaneMouseLeave}
                 onClickCapture={handleComparePaneClick}
+                onWheel={handleComparePaneWheel}
                 className="flex-1 min-h-0 overflow-auto bg-gray-100"
               >
                 {compareRightUrl && (
-                  <div className="space-y-3 p-2">
+                  <div className="space-y-3 p-2 w-max min-w-full">
                     <Document
                       file={compareRightUrl}
                       options={comparePdfOptions}
@@ -1481,11 +1553,11 @@ latexdiff --version`}
                         <div
                           key={`right-page-${index + 1}`}
                           data-compare-page-number={index + 1}
-                          className="mx-auto bg-white border border-gray-200 rounded-sm shadow-sm overflow-hidden"
+                          className="w-fit mx-auto bg-white border border-gray-200 rounded-sm shadow-sm"
                         >
                           <Page
                             pageNumber={index + 1}
-                            width={compareRightPageWidth}
+                            width={compareRightRenderWidth}
                             renderTextLayer
                             renderAnnotationLayer
                             loading={null}
