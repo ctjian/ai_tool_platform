@@ -44,12 +44,15 @@ function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [previewImage, setPreviewImage] = useState<string | null>(null)
   const prevImagesRef = useRef<ImageFile[]>([])
+  const [isExpanded, setIsExpanded] = useState(false)
+  const shouldUseRounded = isExpanded || images.length > 0 || pdfFiles.length > 0
 
   const adjustTextareaHeight = () => {
     if (!textareaRef.current) return
     textareaRef.current.style.height = 'auto'
-    const newHeight = Math.min(textareaRef.current.scrollHeight, 200)
+    const newHeight = Math.min(textareaRef.current.scrollHeight, 240)
     textareaRef.current.style.height = `${newHeight}px`
+    setIsExpanded(newHeight > 48)
   }
 
   useEffect(() => {
@@ -219,7 +222,11 @@ function ChatInput({
 
   return (
     <div className="relative">
-      <div className={`w-full border border-gray-300 bg-white rounded-[999px] ${containerShadowClass}`}>
+      <div
+        className={`w-full border border-gray-300 bg-white overflow-hidden ${
+          shouldUseRounded ? 'rounded-2xl' : 'rounded-full'
+        } ${containerShadowClass}`}
+      >
         {/* 图片预览区域（内嵌输入框） */}
         {images.length > 0 && (
           <div className="flex gap-2 p-3 pb-0 flex-wrap">
@@ -265,13 +272,15 @@ function ChatInput({
         )}
 
         {/* 输入区域 */}
-        <div className="relative flex items-center gap-2 p-3">
+        <div className={`relative flex gap-2 p-3 ${isExpanded ? 'items-end' : 'items-center'}`}>
           {/* 添加附件按钮 */}
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={disabled}
-            className="flex-shrink-0 w-10 h-10 flex items-center justify-center hover:opacity-60 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            className={`flex-shrink-0 w-10 h-10 flex items-center justify-center hover:opacity-60 transition disabled:opacity-50 disabled:cursor-not-allowed ${
+              isExpanded ? 'self-end' : ''
+            }`}
             title="上传图片或PDF"
           >
             <Plus size={20} className="text-gray-600" />
@@ -300,9 +309,11 @@ function ChatInput({
               onPaste={handlePaste}
               placeholder="有问题，尽管问"
               disabled={disabled || loading}
-              className={`w-full pl-2 pr-12 py-2 bg-transparent text-gray-900 resize-none focus:outline-none disabled:bg-transparent disabled:cursor-not-allowed text-base placeholder-gray-500`}
+              className={`w-full pl-2 pr-12 bg-transparent text-gray-900 resize-none focus:outline-none disabled:bg-transparent disabled:cursor-not-allowed text-base placeholder-gray-500 overflow-y-auto ${
+                isExpanded ? 'pb-10 pt-2' : 'py-2'
+              }`}
               rows={1}
-              style={{ minHeight: '40px', maxHeight: '200px' }}
+              style={{ minHeight: '40px', maxHeight: '240px' }}
             />
             <button
               onClick={() => {
@@ -316,10 +327,12 @@ function ChatInput({
                 !loading &&
                 (disabled || (!value.trim() && images.length === 0 && pdfFiles.length === 0))
               }
-              className={`absolute right-0 top-1/2 -translate-y-1/2 flex items-center justify-center w-10 h-10 rounded-full transition ${
+              className={`absolute right-0 ${
+                isExpanded ? 'bottom-0' : 'top-1/2 -translate-y-1/2'
+              } flex items-center justify-center w-10 h-10 rounded-full shadow-sm transition ${
                 loading
                   ? 'bg-red-500 hover:bg-red-600 text-white'
-                  : 'bg-gray-800 hover:bg-gray-900 text-white'
+                  : 'bg-black hover:bg-gray-900 text-white'
               } disabled:opacity-30 disabled:cursor-not-allowed`}
             >
               {loading ? <Square size={18} /> : <Send size={18} />}
