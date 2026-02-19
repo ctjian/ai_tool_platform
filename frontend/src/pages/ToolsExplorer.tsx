@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store/app';
 import { Input, Card, CardContent, Loading } from '../components/ui';
 import { ToolDetailModal } from '../components/ToolDetailModal';
@@ -27,7 +28,15 @@ export const ToolsExplorer = () => {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedTool, setSelectedTool] = useState<Tool | null>(null);
-  const { setCurrentTool, setConversations, setTools: setStoreTools, tools: storeTools, currentTool } = useAppStore();
+  const {
+    setCurrentTool,
+    setCurrentConversation,
+    setConversations,
+    setTools: setStoreTools,
+    tools: storeTools,
+    currentTool,
+  } = useAppStore();
+  const navigate = useNavigate();
 
   useEffect(() => {
     loadData();
@@ -83,6 +92,8 @@ export const ToolsExplorer = () => {
 
   const handleSelectTool = async (tool: Tool) => {
     setCurrentTool(tool as any);
+    setCurrentConversation(null);
+    navigate('/');
     try {
       // 加载所有对话，而不只是该工具的对话
       const res = await apiClient.getConversations();

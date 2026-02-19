@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useAppStore } from './store/app'
 import apiClient from './api/client'
 import Sidebar from './components/Sidebar'
@@ -9,16 +10,41 @@ import { ToolsExplorer } from './pages/ToolsExplorer'
 import { CustomToolsPage } from './pages/CustomToolsPage'
 import { AiNotebookPage } from './pages/AiNotebookPage'
 
+type PageKey = 'chat' | 'settings' | 'explorer' | 'custom-tools' | 'notebook'
+
+const PAGE_PATHS: Record<PageKey, string> = {
+  chat: '/',
+  settings: '/settings',
+  explorer: '/explorer',
+  'custom-tools': '/custom-tools',
+  notebook: '/notebook',
+}
+
+const normalizePathname = (pathname: string) => {
+  if (pathname.length > 1 && pathname.endsWith('/')) {
+    return pathname.slice(0, -1)
+  }
+  return pathname
+}
+
+const getPageFromPath = (pathname: string): PageKey => {
+  const normalized = normalizePathname(pathname)
+  if (normalized === '/' || normalized === '/chat') return 'chat'
+  if (normalized.startsWith(PAGE_PATHS.settings)) return 'settings'
+  if (normalized.startsWith(PAGE_PATHS.explorer)) return 'explorer'
+  if (normalized.startsWith(PAGE_PATHS['custom-tools'])) return 'custom-tools'
+  if (normalized.startsWith(PAGE_PATHS.notebook)) return 'notebook'
+  return 'chat'
+}
+
 function App() {
   const { 
     setCategories, 
     setTools,
     setLoading,
-    currentTool,
     setCurrentTool,
     setConversations,
     setCurrentConversation,
-    currentConversation,
     apiConfig,
     setApiConfig,
     setHasBackendApiKey,
@@ -26,7 +52,9 @@ function App() {
     setAvailableModelGroups,
   } = useAppStore()
 
-  const [currentPage, setCurrentPage] = useState<'chat' | 'settings' | 'explorer' | 'custom-tools' | 'notebook'>('chat')
+  const location = useLocation()
+  const navigate = useNavigate()
+  const currentPage = getPageFromPath(location.pathname)
 
   useEffect(() => {
     const loadInitialData = async () => {
@@ -97,68 +125,16 @@ function App() {
     loadInitialData()
   }, [setCategories, setTools, setConversations, setLoading, setCurrentConversation, setCurrentTool])
 
-  const handlePageChange = (page: 'chat' | 'settings' | 'explorer' | 'custom-tools' | 'notebook') => {
-    setCurrentPage(page)
+  const handlePageChange = (page: PageKey) => {
+    const nextPath = PAGE_PATHS[page]
+    if (location.pathname !== nextPath) {
+      navigate(nextPath)
+    }
     // 切换到设置、提示词广场或自定义工具时，清除当前工具和对话以显示对应页面
     if (page === 'settings' || page === 'explorer' || page === 'custom-tools' || page === 'notebook') {
       setCurrentTool(null)
       setCurrentConversation(null)
     }
-  }
-
-  const renderRightContent = () => {
-    // chat 模式 - 最高优先级
-    if (currentPage === 'chat') {
-      return <ChatWindow />;
-    }
-
-    // 有工具或有对话时显示聊天窗口
-    if (currentTool || currentConversation) {
-      return <ChatWindow />
-    }
-
-    if (currentPage === 'settings') {
-      return (
-        <div className="flex-1 overflow-y-auto bg-white p-6">
-          <SettingsPage />
-        </div>
-      )
-    }
-    
-    if (currentPage === 'explorer') {
-      return (
-        <div className="flex-1 overflow-y-auto bg-white p-6">
-          <ToolsExplorer />
-        </div>
-      )
-    }
-    
-    if (currentPage === 'custom-tools') {
-      return (
-        <div className="flex-1 overflow-y-auto bg-white p-6">
-          <CustomToolsPage />
-        </div>
-      )
-    }
-
-    if (currentPage === 'notebook') {
-      return (
-        <div className="flex-1 overflow-y-auto bg-white p-6">
-          <AiNotebookPage />
-        </div>
-      )
-    }
-
-    // 默认：显示欢迎页面
-    return (
-      <div className="flex-1 flex items-center justify-center bg-white">
-        <div className="text-center">
-          <div className="text-6xl mb-4">�</div>
-          <h2 className="text-2xl font-bold mb-2">欢迎使用AI工具</h2>
-          <p className="text-gray-600">点击左侧"提示词广场"开始探索工具</p>
-        </div>
-      </div>
-    )
   }
 
   return (
@@ -173,7 +149,43 @@ function App() {
       
       {/* 右侧内容区 */}
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-        {renderRightContent()}
+        <Routes>
+          <Route path="/" element={<ChatWindow />} />
+          <Route path="/chat" element={<Navigate to="/" replace />} />
+          <Route
+            path="/settings"
+            element={
+              <div className="flex-1 overflow-y-auto bg-white p-6">
+                <SettingsPage />
+              </div>
+            }
+          />
+          <Route
+            path="/explorer"
+            element={
+              <div className="flex-1 overflow-y-auto bg-white p-6">
+                <ToolsExplorer />
+              </div>
+            }
+          />
+          <Route
+            path="/custom-tools"
+            element={
+              <div className="flex-1 overflow-y-auto bg-white p-6">
+                <CustomToolsPage />
+              </div>
+            }
+          />
+          <Route
+            path="/notebook"
+            element={
+              <div className="flex-1 overflow-y-auto bg-white p-6">
+                <AiNotebookPage />
+              </div>
+            }
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
       </div>
     </div>
   )

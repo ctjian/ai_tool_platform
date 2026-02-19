@@ -3,17 +3,22 @@
 Review note:
 - 挂载 /papers 静态目录，前端可直接访问解析后的论文 PDF 资源。
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import logging
 import os
+from pathlib import Path
 
 from app.config import settings
 from app.database import init_db
 
 logger = logging.getLogger("uvicorn.error")
+BASE_DIR = Path(__file__).resolve().parents[2]
+FRONTEND_DIST_DIR = BASE_DIR / "frontend" / "dist"
+FRONTEND_INDEX_FILE = FRONTEND_DIST_DIR / "index.html"
 
 
 @asynccontextmanager
@@ -67,11 +72,17 @@ if os.path.exists(settings.PAPER_DATA_DIR):
     app.mount("/papers", StaticFiles(directory=settings.PAPER_DATA_DIR), name="papers")
 if os.path.exists(settings.CUSTOM_TOOLS_DATA_DIR):
     app.mount("/custom-tools-files", StaticFiles(directory=settings.CUSTOM_TOOLS_DATA_DIR), name="custom-tools-files")
+if FRONTEND_DIST_DIR.exists():
+    assets_dir = FRONTEND_DIST_DIR / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
 
 @app.get("/")
 async def root():
     """根路径"""
+    if FRONTEND_INDEX_FILE.exists():
+        return FileResponse(str(FRONTEND_INDEX_FILE))
     return {
         "message": "欢迎使用AI工具平台API",
         "version": settings.APP_VERSION,
@@ -97,6 +108,18 @@ app.include_router(conversations.router, prefix="/api/v1", tags=["conversations"
 app.include_router(notebook.router, prefix="/api/v1", tags=["notebook"])
 app.include_router(config.router, prefix="/api/v1/config", tags=["config"])
 app.include_router(custom_tools.router, prefix="/api/v1/custom-tools", tags=["custom-tools"])
+
+if FRONTEND_DIST_DIR.exists():
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404)
+        requested_file = FRONTEND_DIST_DIR / full_path
+        if requested_file.is_file():
+            return FileResponse(str(requested_file))
+        if FRONTEND_INDEX_FILE.exists():
+            return FileResponse(str(FRONTEND_INDEX_FILE))
+        raise HTTPException(status_code=404)
 
 
 if __name__ == "__main__":

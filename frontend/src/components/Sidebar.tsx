@@ -71,6 +71,7 @@ function Sidebar({ onPageChange, currentPage = 'chat' }: SidebarProps) {
 
   const handleSelectConversation = async (conversation: any) => {
     try {
+      onPageChange?.('chat')
       setCurrentConversation(conversation)
       
       // 获取对话的详细信息（包含消息）
