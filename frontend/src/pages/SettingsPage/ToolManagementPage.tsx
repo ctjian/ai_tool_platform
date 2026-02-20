@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Button, Modal, ModalFooter, Input, Select, Form, FormGroup, addToast, Loading } from '../../components/ui';
 import apiClient from '../../api/client';
+import { useAppStore } from '../../store/app';
 import type { Category, Tool } from '../../types/api';
+import { getDeletePassword } from '../../utils/deletePassword';
 
 export const ToolManagementPage = () => {
   const [tools, setTools] = useState<Tool[]>([]);
@@ -10,12 +12,19 @@ export const ToolManagementPage = () => {
   const [showModal, setShowModal] = useState(false);
   const [editingTool, setEditingTool] = useState<Tool | null>(null);
   const [formData, setFormData] = useState({
+    id: '',
     name: '',
     category_id: '',
     icon: '🛠️',
     description: '',
     system_prompt: '',
   });
+  const [deleteTarget, setDeleteTarget] = useState<Tool | null>(null);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const { setTools: setStoreTools, setCategories: setStoreCategories, setCurrentTool, currentTool } = useAppStore();
+  const requiredDeletePassword = getDeletePassword();
 
   useEffect(() => {
     loadData();
@@ -27,8 +36,12 @@ export const ToolManagementPage = () => {
         apiClient.getTools(),
         apiClient.getCategories(),
       ]);
-      setTools(toolsRes.data.tools || toolsRes.data);
-      setCategories(categoriesRes.data.categories || categoriesRes.data);
+      const toolsData = toolsRes.data.tools || toolsRes.data;
+      const categoriesData = categoriesRes.data.categories || categoriesRes.data;
+      setTools(toolsData);
+      setCategories(categoriesData);
+      setStoreTools(toolsData);
+      setStoreCategories(categoriesData);
       setLoading(false);
     } catch (error) {
       console.error('Failed to load data:', error);
@@ -41,6 +54,7 @@ export const ToolManagementPage = () => {
     if (tool) {
       setEditingTool(tool);
       setFormData({
+        id: tool.id,
         name: tool.name,
         category_id: tool.category_id,
         icon: tool.icon,
@@ -50,6 +64,7 @@ export const ToolManagementPage = () => {
     } else {
       setEditingTool(null);
       setFormData({
+        id: '',
         name: '',
         category_id: '',
         icon: '🛠️',
@@ -63,38 +78,67 @@ export const ToolManagementPage = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!formData.name || !formData.category_id || !formData.description || !formData.system_prompt) {
+    if (!formData.id || !formData.name || !formData.category_id || !formData.description || !formData.system_prompt) {
       addToast('请填写所有必填字段', 'error');
       return;
     }
 
     try {
       if (editingTool) {
-        // TODO: 等待后端实现PUT /tools/{id}
-        // await apiClient.updateTool(editingTool.id, formData);
-        addToast('暂不支持编辑工具', 'info');
+        await apiClient.updateTool(editingTool.id, {
+          name: formData.name,
+          category_id: formData.category_id,
+          icon: formData.icon,
+          description: formData.description,
+          system_prompt: formData.system_prompt,
+        });
+        addToast('工具已更新', 'success');
       } else {
-        // TODO: 等待后端实现POST /tools
-        // await apiClient.createTool(formData);
-        addToast('暂不支持添加工具', 'info');
+        await apiClient.createTool({
+          id: formData.id.trim(),
+          name: formData.name,
+          category_id: formData.category_id,
+          icon: formData.icon,
+          icon_type: 'emoji',
+          description: formData.description,
+          system_prompt: formData.system_prompt,
+        });
+        addToast('工具已添加', 'success');
       }
       setShowModal(false);
       loadData();
     } catch (error) {
+      console.error('Failed to save tool:', error);
       addToast('操作失败', 'error');
     }
   };
 
-  const handleDelete = async (_toolId: string) => {
-    if (!confirm('确定要删除这个工具吗？')) return;
+  const handleRequestDelete = (tool: Tool) => {
+    setDeleteTarget(tool);
+    setDeletePassword('');
+    setDeleteError('');
+  };
 
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget) return;
+    if (deletePassword.trim() !== requiredDeletePassword) {
+      setDeleteError('密码错误');
+      return;
+    }
+    setDeleteLoading(true);
     try {
-      // TODO: 等待后端实现DELETE /tools/{id}
-      // await apiClient.deleteTool(toolId);
-      addToast('暂不支持删除工具', 'info');
-      loadData();
+      await apiClient.deleteTool(deleteTarget.id);
+      addToast('工具已删除', 'success');
+      if (currentTool?.id === deleteTarget.id) {
+        setCurrentTool(null);
+      }
+      await loadData();
+      setDeleteTarget(null);
     } catch (error) {
+      console.error('Failed to delete tool:', error);
       addToast('删除失败', 'error');
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -138,7 +182,7 @@ export const ToolManagementPage = () => {
                     编辑
                   </button>
                   <button
-                    onClick={() => handleDelete(tool.id)}
+                    onClick={() => handleRequestDelete(tool)}
                     className="text-red-600 hover:text-red-700"
                   >
                     删除
@@ -152,6 +196,17 @@ export const ToolManagementPage = () => {
 
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={editingTool ? '编辑工具' : '添加工具'}>
         <Form onSubmit={handleSubmit} className="space-y-4">
+          <FormGroup>
+            <Input
+              label="工具ID"
+              value={formData.id}
+              onChange={(e) => setFormData((p) => ({ ...p, id: e.target.value }))}
+              placeholder="例如 cn-to-en"
+              disabled={Boolean(editingTool)}
+              required
+            />
+          </FormGroup>
+
           <FormGroup>
             <Input
               label="工具名称"
@@ -210,6 +265,39 @@ export const ToolManagementPage = () => {
             </Button>
           </ModalFooter>
         </Form>
+      </Modal>
+
+      <Modal
+        isOpen={Boolean(deleteTarget)}
+        onClose={() => setDeleteTarget(null)}
+        title="删除验证"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">删除工具后将不可恢复。</p>
+          <Input
+            label="删除密码"
+            type="password"
+            value={deletePassword}
+            onChange={(e) => {
+              setDeletePassword(e.target.value);
+              if (deleteError) setDeleteError('');
+            }}
+            placeholder="请输入删除密码"
+            error={deleteError}
+          />
+        </div>
+        <ModalFooter>
+          <Button variant="secondary" onClick={() => setDeleteTarget(null)}>
+            取消
+          </Button>
+          <Button
+            variant="primary"
+            onClick={handleConfirmDelete}
+            disabled={deleteLoading}
+          >
+            {deleteLoading ? '删除中...' : '确认删除'}
+          </Button>
+        </ModalFooter>
       </Modal>
     </div>
   );

@@ -1,14 +1,11 @@
 """自定义工具API.
 
 Review note:
-- 保留 demo/bib 示例接口。
 - 新增 arxiv-translate 任务接口（创建/查询/取消）。
 """
 from fastapi import APIRouter, HTTPException
 
 from app.schemas.custom_tool import (
-    DemoCustomToolRequest,
-    DemoCustomToolResponse,
     BibLookupRequest,
     BibLookupResponse,
     BibLookupCandidate,
@@ -25,12 +22,6 @@ from app.custom_tools.arxiv_translate.service import (
 )
 
 router = APIRouter()
-
-
-@router.post("/demo", response_model=DemoCustomToolResponse)
-async def run_demo_custom_tool(request: DemoCustomToolRequest):
-    """演示一个简单的自定义工具（后端处理：值 + 1）"""
-    return DemoCustomToolResponse(result=request.value + 1)
 
 
 @router.post("/bib-lookup", response_model=BibLookupResponse)

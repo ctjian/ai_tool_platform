@@ -7,16 +7,6 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 
 
-class DemoCustomToolRequest(BaseModel):
-    """测试自定义工具请求"""
-    value: int = Field(..., ge=-10**9, le=10**9)
-
-
-class DemoCustomToolResponse(BaseModel):
-    """测试自定义工具响应"""
-    result: int
-
-
 class BibLookupRequest(BaseModel):
     """Bib 引用查询请求"""
     title: str = Field(..., min_length=1, max_length=500)

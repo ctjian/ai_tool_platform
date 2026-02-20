@@ -27,12 +27,34 @@ const api = axios.create({
 export const apiClient = {
   // 分类相关
   getCategories: () => api.get<{ categories: Category[] }>('/categories'),
+  createCategory: (data: {
+    id: string
+    name: string
+    icon: string
+    description?: string
+    order?: number
+  }) => api.post<Category>('/categories', data),
+  updateCategory: (categoryId: string, data: Partial<Category>) =>
+    api.put<Category>(`/categories/${categoryId}`, data),
+  deleteCategory: (categoryId: string) =>
+    api.delete(`/categories/${categoryId}`),
   
   // 工具相关
   getTools: (categoryId?: string) => 
     api.get<{ tools: Tool[] }>('/tools', { params: { category_id: categoryId } }),
+  createTool: (data: {
+    id: string
+    name: string
+    category_id: string
+    icon: string
+    icon_type?: 'emoji' | 'image'
+    description: string
+    system_prompt: string
+  }) => api.post<Tool>('/tools', data),
   updateTool: (toolId: string, data: Partial<Tool>) =>
     api.put<Tool>(`/tools/${toolId}`, data),
+  deleteTool: (toolId: string) =>
+    api.delete(`/tools/${toolId}`),
   
   // 会话相关
   createConversation: (toolId: string | null, title: string) =>
@@ -228,10 +250,6 @@ export const apiClient = {
     api.put('/config', config),
   testOpenAIConnection: (data: { api_key: string; base_url: string; model: string }) =>
     api.post('/config/test', data),
-
-  // 自定义工具示例
-  runCustomToolDemo: (value: number) =>
-    api.post('/custom-tools/demo', { value }),
 
   runBibLookup: (payload: {
     title: string

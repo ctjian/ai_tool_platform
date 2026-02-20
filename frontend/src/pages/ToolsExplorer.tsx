@@ -1,29 +1,15 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store/app';
-import { Input, Card, CardContent, Loading } from '../components/ui';
+import { Input, Card, CardContent, Loading, Tabs } from '../components/ui';
 import { ToolDetailModal } from '../components/ToolDetailModal';
 import apiClient from '../api/client';
 import { Eye } from 'lucide-react';
-
-interface Tool {
-  id: string;
-  name: string;
-  category_id: string;
-  icon: string;
-  description: string;
-  system_prompt: string;
-}
-
-interface Category {
-  id: string;
-  name: string;
-  icon: string;
-}
+import { ToolManagementPage } from './SettingsPage/ToolManagementPage';
+import { CategoryManagementPage } from './SettingsPage/CategoryManagementPage';
+import type { Tool } from '../types/api';
 
 export const ToolsExplorer = () => {
-  const [tools, setTools] = useState<Tool[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -33,7 +19,9 @@ export const ToolsExplorer = () => {
     setCurrentConversation,
     setConversations,
     setTools: setStoreTools,
-    tools: storeTools,
+    setCategories: setStoreCategories,
+    tools,
+    categories,
     currentTool,
   } = useAppStore();
   const navigate = useNavigate();
@@ -48,8 +36,10 @@ export const ToolsExplorer = () => {
         apiClient.getTools(),
         apiClient.getCategories(),
       ]);
-      setTools(toolsRes.data.tools || toolsRes.data);
-      setCategories(categoriesRes.data.categories || categoriesRes.data);
+      const toolsData = toolsRes.data.tools || toolsRes.data;
+      const categoriesData = categoriesRes.data.categories || categoriesRes.data;
+      setStoreTools(toolsData);
+      setStoreCategories(categoriesData);
       setLoading(false);
     } catch (error) {
       console.error('Failed to load data:', error);
@@ -107,12 +97,9 @@ export const ToolsExplorer = () => {
     if (!selectedTool) return;
     const res = await apiClient.updateTool(selectedTool.id, { system_prompt: prompt });
     const updated = res.data;
-    setTools((prev) =>
-      prev.map((t) => (t.id === updated.id ? { ...t, system_prompt: updated.system_prompt } : t))
-    );
     setSelectedTool((prev) => (prev ? { ...prev, system_prompt: updated.system_prompt } : prev));
     setStoreTools(
-      storeTools.map((t) => (t.id === updated.id ? { ...t, system_prompt: updated.system_prompt } : t))
+      tools.map((t) => (t.id === updated.id ? { ...t, system_prompt: updated.system_prompt } : t))
     );
     if (currentTool?.id === updated.id) {
       setCurrentTool({ ...currentTool, system_prompt: updated.system_prompt } as any);
@@ -121,13 +108,8 @@ export const ToolsExplorer = () => {
 
   if (loading) return <Loading />;
 
-  return (
-    <div className="max-w-6xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">提示词广场</h1>
-        <p className="text-gray-600 mt-2">浏览和选择提示词工具</p>
-      </div>
-
+  const browseContent = (
+    <>
       {/* 搜索和过滤 */}
       <div className="flex flex-col md:flex-row gap-4 mb-6">
         <div className="flex-1">
@@ -299,6 +281,34 @@ export const ToolsExplorer = () => {
         onClose={() => setSelectedTool(null)}
         onSave={handleSavePrompt}
       />
+    </>
+  );
+
+  const tabs = [
+    {
+      label: '浏览',
+      icon: '🧭',
+      content: browseContent,
+    },
+    {
+      label: '提示词管理',
+      icon: '🛠️',
+      content: <ToolManagementPage />,
+    },
+    {
+      label: '分类管理',
+      icon: '📂',
+      content: <CategoryManagementPage />,
+    },
+  ];
+
+  return (
+    <div className="max-w-6xl mx-auto">
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold text-gray-900">提示词广场</h1>
+        <p className="text-gray-600 mt-2">浏览和管理提示词工具</p>
+      </div>
+      <Tabs tabs={tabs} />
     </div>
   );
 };

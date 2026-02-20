@@ -16,10 +16,6 @@ interface CustomTool {
   icon: string
 }
 
-interface DemoResponse {
-  result: number
-}
-
 interface CitationHoverState {
   key: string
   text: string
@@ -238,12 +234,6 @@ export const CustomToolsPage = () => {
   const tools = useMemo<CustomTool[]>(
     () => [
       {
-        id: 'demo-text-pipeline',
-        name: '测试自定义工具',
-        description: '输入一个值，后端返回该值 + 1',
-        icon: '🧪',
-      },
-      {
         id: 'bib-lookup',
         name: 'Bib 引用查询',
         description: '输入论文标题，输出标准 BibTeX 引用',
@@ -260,12 +250,10 @@ export const CustomToolsPage = () => {
   )
 
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null)
-  const [inputValue, setInputValue] = useState('1')
   const [bibTitle, setBibTitle] = useState('')
   const [bibShorten, setBibShorten] = useState(false)
   const [bibRemoveFields, setBibRemoveFields] = useState('url,biburl,address,publisher')
   const [loading, setLoading] = useState(false)
-  const [output, setOutput] = useState<DemoResponse | null>(null)
   const [bibOutput, setBibOutput] = useState<string | null>(null)
   const [bibCandidates, setBibCandidates] = useState<{ title: string; bibtex: string }[]>([])
   const [copiedBibKey, setCopiedBibKey] = useState<string | null>(null)
@@ -462,14 +450,7 @@ export const CustomToolsPage = () => {
     if (!selectedTool) return
     try {
       setLoading(true)
-      if (selectedTool.id === 'demo-text-pipeline') {
-        const parsed = Number(inputValue)
-        if (!Number.isFinite(parsed)) {
-          return
-        }
-        const res = await apiClient.runCustomToolDemo(parsed)
-        setOutput(res.data)
-      } else if (selectedTool.id === 'bib-lookup') {
+      if (selectedTool.id === 'bib-lookup') {
         const res = await apiClient.runBibLookup({
           title: bibTitle.trim(),
           shorten: bibShorten,
@@ -499,7 +480,6 @@ export const CustomToolsPage = () => {
       }
     } catch (error) {
       console.error('Failed to run custom tool:', error)
-      setOutput(null)
       setBibOutput(null)
       setBibCandidates([])
       setArxivJob(null)
@@ -923,7 +903,7 @@ export const CustomToolsPage = () => {
     <div className="max-w-6xl mx-auto">
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-900">自定义工具</h1>
-        <p className="text-gray-600 mt-2">展示一个多步流程的自定义工具示例</p>
+        <p className="text-gray-600 mt-2">内置自定义工具合集</p>
       </div>
 
       {!selectedTool && (
@@ -935,7 +915,6 @@ export const CustomToolsPage = () => {
                 className="cursor-pointer h-full"
                 onClick={() => {
                   setSelectedToolId(tool.id)
-                  setOutput(null)
                   setBibOutput(null)
                   setBibCandidates([])
                   setArxivJob(null)
@@ -963,7 +942,6 @@ export const CustomToolsPage = () => {
               className="hover:text-gray-900"
               onClick={() => {
                 setSelectedToolId(null)
-                setOutput(null)
                 setArxivHistory([])
                 setExpandedHistoryJobId(null)
               }}
@@ -979,15 +957,6 @@ export const CustomToolsPage = () => {
               <CardTitle>{selectedTool.name}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {selectedTool.id === 'demo-text-pipeline' && (
-                <Input
-                  label="输入值"
-                  type="number"
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  placeholder="输入一个数字"
-                />
-              )}
               {selectedTool.id === 'bib-lookup' && (
                 <div className="space-y-3">
                   <Input
@@ -1177,15 +1146,6 @@ latexdiff --version`}
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               {loading && <Loading />}
-              {!loading && selectedTool.id === 'demo-text-pipeline' && !output && (
-                <p className="text-gray-500">暂无结果</p>
-              )}
-              {!loading && selectedTool.id === 'demo-text-pipeline' && output && (
-                <div className="border rounded-lg p-3 bg-gray-50">
-                  <div className="font-semibold text-gray-900 mb-1">最终结果</div>
-                  <div className="text-gray-700 whitespace-pre-wrap">{output.result}</div>
-                </div>
-              )}
               {!loading && selectedTool.id === 'bib-lookup' && !bibOutput && bibCandidates.length === 0 && (
                 <p className="text-gray-500">暂无结果</p>
               )}
