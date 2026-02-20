@@ -22,7 +22,11 @@ from app.utils.chat2api_helper import stream_chat2api_completion
 from app.utils.pricing import compute_text_cost
 from app.utils.system_prompt import get_default_system_prompt, pick_system_prompt
 from app.config import settings
-from app.services.pipeline.paper_pipeline import ArxivPipelineError, build_arxiv_context_for_targets
+from app.services.pipeline.paper_pipeline import (
+    ArxivPipelineError,
+    build_arxiv_context_for_targets,
+    build_section_context_for_targets,
+)
 from app.services.sources.arxiv.id_parser import extract_arxiv_targets, build_target_from_ids
 from app.services.session.paper_state import (
     activate_papers_in_conversation,
@@ -279,6 +283,7 @@ async def generate_chat_stream(
 
         active_entries = get_active_registry_entries(conversation_extra)
         active_targets = []
+        section_filters: Dict[str, List[str]] = {}
         for item in active_entries:
             target = build_target_from_ids(
                 paper_id=str(item.get("paper_id") or ""),
@@ -286,54 +291,73 @@ async def generate_chat_stream(
             )
             if target:
                 active_targets.append(target)
+            section_filter = item.get("section_filter") if isinstance(item, dict) else None
+            if isinstance(section_filter, dict):
+                raw_section_ids = section_filter.get("section_ids")
+                if isinstance(raw_section_ids, list):
+                    section_ids = [str(x).strip() for x in raw_section_ids if str(x).strip()]
+                    if section_ids and target:
+                        section_filters[target.canonical_id] = section_ids
 
         arxiv_context = None
         if active_targets:
-            history_user_queries = [
-                str(msg.content or "").strip()
-                for msg in messages_history
-                if msg.role == "user" and str(msg.content or "").strip()
-            ]
-            rewrite_api_config = {
-                "api_key": str(getattr(api_config, "api_key", "") or ""),
-                "base_url": str(getattr(api_config, "base_url", "") or ""),
-            }
-            progress_queue: asyncio.Queue[Dict] = asyncio.Queue()
-            loop = asyncio.get_running_loop()
+            if section_filters:
+                try:
+                    arxiv_context = build_section_context_for_targets(
+                        active_targets,
+                        section_filters,
+                        settings,
+                    )
+                except ArxivPipelineError as exc:
+                    error_data = json.dumps({"error": str(exc)})
+                    yield f"event: error\ndata: {error_data}\n\n"
+                    return
+            else:
+                history_user_queries = [
+                    str(msg.content or "").strip()
+                    for msg in messages_history
+                    if msg.role == "user" and str(msg.content or "").strip()
+                ]
+                rewrite_api_config = {
+                    "api_key": str(getattr(api_config, "api_key", "") or ""),
+                    "base_url": str(getattr(api_config, "base_url", "") or ""),
+                }
+                progress_queue: asyncio.Queue[Dict] = asyncio.Queue()
+                loop = asyncio.get_running_loop()
 
-            def progress_reporter(payload: Dict) -> None:
-                loop.call_soon_threadsafe(progress_queue.put_nowait, payload)
+                def progress_reporter(payload: Dict) -> None:
+                    loop.call_soon_threadsafe(progress_queue.put_nowait, payload)
 
-            worker_task = asyncio.create_task(
-                asyncio.to_thread(
-                    build_arxiv_context_for_targets,
-                    user_message,
-                    active_targets,
-                    settings,
-                    progress_reporter,
-                    history_user_queries,
-                    rewrite_api_config,
+                worker_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        build_arxiv_context_for_targets,
+                        user_message,
+                        active_targets,
+                        settings,
+                        progress_reporter,
+                        history_user_queries,
+                        rewrite_api_config,
+                    )
                 )
-            )
-            try:
-                while not worker_task.done():
-                    try:
-                        progress_payload = await asyncio.wait_for(progress_queue.get(), timeout=0.12)
+                try:
+                    while not worker_task.done():
+                        try:
+                            progress_payload = await asyncio.wait_for(progress_queue.get(), timeout=0.12)
+                            status_data = json.dumps(progress_payload, ensure_ascii=False)
+                            yield f"event: status\ndata: {status_data}\n\n"
+                        except asyncio.TimeoutError:
+                            continue
+
+                    while not progress_queue.empty():
+                        progress_payload = progress_queue.get_nowait()
                         status_data = json.dumps(progress_payload, ensure_ascii=False)
                         yield f"event: status\ndata: {status_data}\n\n"
-                    except asyncio.TimeoutError:
-                        continue
 
-                while not progress_queue.empty():
-                    progress_payload = progress_queue.get_nowait()
-                    status_data = json.dumps(progress_payload, ensure_ascii=False)
-                    yield f"event: status\ndata: {status_data}\n\n"
-
-                arxiv_context = await worker_task
-            except ArxivPipelineError as exc:
-                error_data = json.dumps({"error": str(exc)})
-                yield f"event: error\ndata: {error_data}\n\n"
-                return
+                    arxiv_context = await worker_task
+                except ArxivPipelineError as exc:
+                    error_data = json.dumps({"error": str(exc)})
+                    yield f"event: error\ndata: {error_data}\n\n"
+                    return
 
         if arxiv_context:
             user_message_for_model = _build_user_message_with_retrieval_context(

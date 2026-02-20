@@ -1023,3 +1023,102 @@ def build_arxiv_context_for_targets(
             "context_max_tokens": int(settings.ARXIV_CONTEXT_MAX_TOKENS),
         },
     )
+
+
+def build_section_context_for_targets(
+    targets: List[ArxivTarget],
+    section_filters: Dict[str, List[str]],
+    settings,
+) -> Optional[ArxivContextPayload]:
+    """Build context directly from selected sections (no retrieval)."""
+    if not targets:
+        return None
+
+    selected_targets: List[ArxivTarget] = []
+    for target in targets:
+        if section_filters.get(target.canonical_id):
+            selected_targets.append(target)
+    if not selected_targets:
+        return None
+
+    target_order = {t.canonical_id: idx for idx, t in enumerate(selected_targets)}
+    ranked_items: List[Dict] = []
+    papers: List[Dict] = []
+    selected_sections_map: Dict[str, List[str]] = {}
+
+    for target in selected_targets:
+        section_ids_raw = section_filters.get(target.canonical_id) or []
+        section_ids = [str(x).strip() for x in section_ids_raw if str(x).strip()]
+        if not section_ids:
+            continue
+        selected_sections_map[target.canonical_id] = section_ids
+
+        chunks, paper_desc, _paths = _prepare_and_load_chunks_for_target(
+            target,
+            settings,
+            progress_callback=None,
+        )
+        filtered_chunks = [
+            c for c in chunks if str(c.get("section_id") or "").strip() in section_ids
+        ]
+        if not filtered_chunks:
+            continue
+        filtered_chunks.sort(key=lambda c: int(c.get("order") or 0))
+
+        for chunk in filtered_chunks:
+            decorated = dict(chunk)
+            decorated["paper_id"] = paper_desc["paper_id"]
+            decorated["paper_canonical_id"] = paper_desc["canonical_id"]
+            decorated["paper_filename"] = paper_desc["filename"]
+            decorated["paper_title"] = paper_desc.get("title") or ""
+            ranked_items.append({"chunk": decorated, "score": 1.0})
+
+        papers.append(paper_desc)
+
+    if not ranked_items:
+        raise ArxivPipelineError("所选章节未解析或没有可用内容。")
+
+    ranked_items.sort(
+        key=lambda item: (
+            target_order.get(str(item["chunk"].get("paper_canonical_id") or ""), 0),
+            int(item["chunk"].get("order") or 0),
+        )
+    )
+
+    context_text = build_context_text(
+        ranked_items=ranked_items,
+        max_chunks=None,
+        max_tokens=settings.ARXIV_CONTEXT_MAX_TOKENS,
+    )
+    if not context_text:
+        raise ArxivPipelineError("所选章节内容为空。")
+
+    papers_public = [
+        {
+            "paper_id": str(p.get("paper_id") or ""),
+            "canonical_id": str(p.get("canonical_id") or ""),
+            "safe_id": str(p.get("safe_id") or ""),
+            "filename": str(p.get("filename") or ""),
+            "pdf_url": str(p.get("pdf_url") or ""),
+            "title": str(p.get("title") or ""),
+            "source_type": str(p.get("source_type") or "arxiv"),
+            "origin_name": str(p.get("origin_name") or ""),
+            "meta_updated_at": p.get("meta_updated_at"),
+        }
+        for p in papers
+    ]
+
+    return ArxivContextPayload(
+        targets=selected_targets,
+        papers=papers_public,
+        query_text="",
+        context_text=context_text,
+        context_prompt=_build_context_prompt(papers_public, context_text),
+        retrieval_meta={
+            "mode": "section_filter",
+            "paper_count": len(papers_public),
+            "papers": papers_public,
+            "selected_sections": selected_sections_map,
+            "context_max_tokens": int(settings.ARXIV_CONTEXT_MAX_TOKENS),
+        },
+    )

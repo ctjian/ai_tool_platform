@@ -58,7 +58,18 @@ export interface ConversationPaperItem {
   source_type?: 'arxiv' | 'upload_pdf' | string
   origin_name?: string
   last_seen_at?: string
+  section_filter?: {
+    mode?: string
+    section_ids?: string[]
+  }
   is_active: boolean
+}
+
+export interface PaperSection {
+  section_id: string
+  title: string
+  level?: number
+  order?: number
 }
 
 export interface ConversationPapersState {

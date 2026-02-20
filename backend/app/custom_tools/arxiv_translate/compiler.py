@@ -59,12 +59,49 @@ _INPUTENC_RE = re.compile(
     r"(?m)^[ \t]*\\usepackage(?:\[[^\]]*\])?\{inputenc\}[ \t]*\n?"
 )
 
+_PDFTEX_COMPAT_BEGIN = "%% ARXIV_TRANSLATE_PDFTEX_COMPAT_BEGIN"
+_PDFTEX_COMPAT_END = "%% ARXIV_TRANSLATE_PDFTEX_COMPAT_END"
+_PDFTEX_COMPAT_BLOCK = rf"""
+{_PDFTEX_COMPAT_BEGIN}
+\makeatletter
+\@ifundefined{{pdfoutput}}{{\newcount\pdfoutput}}{{}}%
+\@ifundefined{{pdfminorversion}}{{\newcount\pdfminorversion}}{{}}%
+\@ifundefined{{pdfpagewidth}}{{\newdimen\pdfpagewidth}}{{}}%
+\@ifundefined{{pdfpageheight}}{{\newdimen\pdfpageheight}}{{}}%
+\@ifundefined{{pdfhorigin}}{{\newdimen\pdfhorigin}}{{}}%
+\@ifundefined{{pdfvorigin}}{{\newdimen\pdfvorigin}}{{}}%
+\@ifundefined{{pdfpagesattr}}{{\def\pdfpagesattr#1{{}}}}{{}}%
+\@ifundefined{{pdfcatalog}}{{\def\pdfcatalog#1{{}}}}{{}}%
+\@ifundefined{{pdfdest}}{{\def\pdfdest#1{{}}}}{{}}%
+\makeatother
+{_PDFTEX_COMPAT_END}
+""".strip()
+
+_PDFTEX_PRIMITIVE_HINTS = (
+    "\\pdfoutput",
+    "\\pdfminorversion",
+    "\\pdfpagewidth",
+    "\\pdfpageheight",
+    "\\pdfhorigin",
+    "\\pdfvorigin",
+    "\\pdfpagesattr",
+    "\\pdfcatalog",
+    "\\pdfdest",
+)
+
 
 def _insert_after_documentclass(text: str, block: str) -> str:
     m = re.search(r"\\documentclass(?:\[[^\]]*\])?\{[^}]+\}", text)
     if not m:
         return text
     return text[: m.end()] + "\n" + block + "\n" + text[m.end() :]
+
+
+def _insert_before_documentclass(text: str, block: str) -> str:
+    m = re.search(r"\\documentclass(?:\[[^\]]*\])?\{[^}]+\}", text)
+    if not m:
+        return text
+    return text[: m.start()] + block + "\n" + text[m.start() :]
 
 
 def _insert_after_ctex_package(text: str, block: str) -> str:
@@ -107,6 +144,189 @@ def ensure_ctex_support(main_tex_path: Path) -> bool:
     if changed:
         main_tex_path.write_text(text, encoding="utf-8")
     return changed
+
+
+_HYPERREF_XETEX_LINE = r"\PassOptionsToPackage{xetex}{hyperref}"
+_HYPERREF_DRIVER_OPTIONS = {
+    "pdftex",
+    "dvips",
+    "dvipdfm",
+    "dvipdfmx",
+    "dviwindo",
+    "vtex",
+    "hypertex",
+}
+
+
+def ensure_hyperref_xetex(main_tex_path: Path) -> bool:
+    """
+    Force hyperref to use the XeTeX driver before it is loaded.
+    Returns True when file changed.
+    """
+    text = main_tex_path.read_text(encoding="utf-8", errors="replace")
+    changed = False
+    if _HYPERREF_XETEX_LINE not in text:
+        updated = _insert_before_documentclass(text, _HYPERREF_XETEX_LINE)
+        if updated != text:
+            text = updated
+            changed = True
+
+    updated, stripped = _strip_hyperref_driver_options(text)
+    if stripped:
+        text = updated
+        changed = True
+
+    if changed:
+        main_tex_path.write_text(text, encoding="utf-8")
+    return changed
+
+
+def _split_option_list(options: str) -> List[str]:
+    parts: List[str] = []
+    buf: List[str] = []
+    depth = 0
+    for ch in options:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth = max(0, depth - 1)
+        if ch == "," and depth == 0:
+            item = "".join(buf).strip()
+            if item:
+                parts.append(item)
+            buf = []
+            continue
+        buf.append(ch)
+    tail = "".join(buf).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _strip_driver_options_from_list(options: str) -> tuple[str, bool]:
+    parts = _split_option_list(options)
+    kept: List[str] = []
+    changed = False
+    for part in parts:
+        lower = part.lower()
+        if lower in _HYPERREF_DRIVER_OPTIONS:
+            changed = True
+            continue
+        if lower.startswith("driver="):
+            driver = lower.split("=", 1)[1].strip()
+            if driver in _HYPERREF_DRIVER_OPTIONS:
+                changed = True
+                continue
+        kept.append(part)
+    return (", ".join(kept), changed)
+
+
+def _strip_hyperref_driver_options(text: str) -> tuple[str, bool]:
+    changed = False
+
+    def _replace_passoptions(match: re.Match) -> str:
+        nonlocal changed
+        opts = match.group(1)
+        new_opts, stripped = _strip_driver_options_from_list(opts)
+        if not stripped:
+            return match.group(0)
+        changed = True
+        if not new_opts:
+            return ""
+        return f"\\PassOptionsToPackage{{{new_opts}}}{{hyperref}}"
+
+    text = re.sub(
+        r"\\PassOptionsToPackage\s*\{([^}]*)\}\s*\{hyperref\}",
+        _replace_passoptions,
+        text,
+    )
+
+    def _replace_usepackage(match: re.Match) -> str:
+        nonlocal changed
+        cmd = match.group("cmd")
+        opts = match.group("opts")
+        if not opts:
+            return match.group(0)
+        new_opts, stripped = _strip_driver_options_from_list(opts)
+        if not stripped:
+            return match.group(0)
+        changed = True
+        if not new_opts:
+            return f"{cmd}{{hyperref}}"
+        return f"{cmd}[{new_opts}]{{hyperref}}"
+
+    pattern = re.compile(
+        r"(?P<cmd>\\(?:usepackage|RequirePackage))\s*(?:\[(?P<opts>[^\]]*)\])?\s*\{hyperref\}"
+    )
+    text = pattern.sub(_replace_usepackage, text)
+
+    return text, changed
+
+
+def ensure_hyperref_driver_sanitized(project_root: Path) -> int:
+    """Strip hyperref driver options (pdftex/dvips/...) from project files."""
+    patched = 0
+    for ext in (".tex", ".sty", ".cls"):
+        for path in project_root.rglob(f"*{ext}"):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            updated, changed = _strip_hyperref_driver_options(text)
+            if not changed:
+                continue
+            try:
+                path.write_text(updated, encoding="utf-8")
+                patched += 1
+            except Exception:
+                continue
+    return patched
+
+
+def _insert_pdftex_compat_block(text: str) -> tuple[str, bool]:
+    if _PDFTEX_COMPAT_BEGIN in text and _PDFTEX_COMPAT_END in text:
+        pattern = re.compile(
+            rf"{re.escape(_PDFTEX_COMPAT_BEGIN)}.*?{re.escape(_PDFTEX_COMPAT_END)}",
+            re.DOTALL,
+        )
+        updated = pattern.sub(lambda _m: _PDFTEX_COMPAT_BLOCK, text)
+        return updated, updated != text
+    if not any(token in text for token in _PDFTEX_PRIMITIVE_HINTS):
+        return text, False
+
+    lines = text.splitlines()
+    insert_at = 0
+    header_re = re.compile(r"\\(NeedsTeXFormat|ProvidesPackage|ProvidesClass|ProvidesFile)\b")
+    for idx, line in enumerate(lines[:80]):
+        if header_re.search(line):
+            insert_at = idx + 1
+    injected = (
+        lines[:insert_at]
+        + ([""] if insert_at > 0 else [])
+        + [_PDFTEX_COMPAT_BLOCK, ""]
+        + lines[insert_at:]
+    )
+    return "\n".join(injected), True
+
+
+def ensure_pdftex_compat(project_root: Path) -> int:
+    """Patch pdfTeX-only primitives for XeLaTeX/LuaLaTeX compatibility."""
+    patched = 0
+    for ext in (".sty", ".cls"):
+        for path in project_root.rglob(f"*{ext}"):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            updated, changed = _insert_pdftex_compat_block(text)
+            if not changed:
+                continue
+            try:
+                path.write_text(updated, encoding="utf-8")
+                patched += 1
+            except Exception:
+                continue
+    return patched
 
 
 def _run_command(

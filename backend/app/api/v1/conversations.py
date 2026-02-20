@@ -284,6 +284,57 @@ async def get_conversation_papers(
     return list_papers_from_extra(extra_dict)
 
 
+@router.get("/conversations/{conversation_id}/papers/{canonical_id}/sections")
+async def get_conversation_paper_sections(
+    conversation_id: str,
+    canonical_id: str,
+    db: AsyncSession = Depends(get_chat_session),
+):
+    """获取论文章节列表（用于 section 选择）。"""
+    conversation = await conversation_crud.get(db, conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    canonical_id = str(canonical_id or "").strip()
+    if not canonical_id:
+        raise HTTPException(status_code=400, detail="缺少 canonical_id")
+
+    extra_dict = parse_conversation_extra(conversation.extra)
+    state = normalize_state(extra_dict)
+    entry = state["papers"]["registry"].get(canonical_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="论文不存在")
+
+    safe_id = str(entry.get("safe_id") or safe_id_from_canonical(canonical_id)).strip()
+    paths = build_paper_paths(settings.PAPER_DATA_DIR, safe_id)
+    meta = load_meta(paths) or {}
+    raw_sections = meta.get("sections") if isinstance(meta, dict) else None
+    sections = []
+    if isinstance(raw_sections, list):
+        for sec in raw_sections:
+            if not isinstance(sec, dict):
+                continue
+            section_id = str(sec.get("section_id") or "").strip()
+            title = str(sec.get("title") or "").strip()
+            if not section_id or not title:
+                continue
+            sections.append(
+                {
+                    "section_id": section_id,
+                    "title": title,
+                    "level": sec.get("level"),
+                    "order": sec.get("order"),
+                }
+            )
+        sections.sort(key=lambda x: int(x.get("order") or 0))
+
+    return {
+        "canonical_id": canonical_id,
+        "ready": bool(raw_sections),
+        "sections": sections,
+    }
+
+
 @router.post("/conversations/{conversation_id}/papers/activate")
 async def activate_conversation_papers(
     conversation_id: str,
@@ -331,6 +382,47 @@ async def deactivate_conversation_paper(
     updated = deactivate_paper_in_conversation(extra_dict, canonical_id)
     await conversation_crud.set_extra(db, conversation_id, serialize_conversation_extra(updated))
     return list_papers_from_extra(updated)
+
+
+@router.post("/conversations/{conversation_id}/papers/section-filter")
+async def update_conversation_paper_section_filter(
+    conversation_id: str,
+    payload: Dict[str, Any] = Body(...),
+    db: AsyncSession = Depends(get_chat_session),
+):
+    """更新论文章节筛选（存入 conversation extra）。"""
+    conversation = await conversation_crud.get(db, conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    canonical_id = str(payload.get("canonical_id") or "").strip()
+    if not canonical_id:
+        raise HTTPException(status_code=400, detail="缺少 canonical_id")
+
+    section_ids_raw = payload.get("section_ids")
+    if section_ids_raw is None:
+        section_ids_raw = []
+    if not isinstance(section_ids_raw, list):
+        raise HTTPException(status_code=400, detail="section_ids 必须为数组")
+    section_ids = [str(x).strip() for x in section_ids_raw if str(x).strip()]
+
+    extra_dict = parse_conversation_extra(conversation.extra)
+    state = normalize_state(extra_dict)
+    entry = state["papers"]["registry"].get(canonical_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="论文不存在")
+
+    if section_ids:
+        entry["section_filter"] = {
+            "mode": "selected",
+            "section_ids": section_ids,
+        }
+    else:
+        entry.pop("section_filter", None)
+
+    state["papers"]["registry"][canonical_id] = entry
+    await conversation_crud.set_extra(db, conversation_id, serialize_conversation_extra(state))
+    return list_papers_from_extra(state)
 
 
 @router.post("/conversations/{conversation_id}/papers/upload-pdf")

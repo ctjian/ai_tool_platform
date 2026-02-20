@@ -5,6 +5,7 @@ import {
   Conversation,
   ChatRequest,
   ConversationPapersState,
+  PaperSection,
   NotebookNote,
   NotebookGenerateRequest,
   NotebookGenerateResponse,
@@ -83,6 +84,10 @@ export const apiClient = {
     ),
   getConversationPapers: (conversationId: string) =>
     api.get<ConversationPapersState>(`/conversations/${conversationId}/papers`),
+  getConversationPaperSections: (conversationId: string, canonicalId: string) =>
+    api.get<{ canonical_id: string; ready: boolean; sections: PaperSection[] }>(
+      `/conversations/${conversationId}/papers/${canonicalId}/sections`
+    ),
   activateConversationPapers: (conversationId: string, canonicalIds: string[]) =>
     api.post<ConversationPapersState>(
       `/conversations/${conversationId}/papers/activate`,
@@ -92,6 +97,15 @@ export const apiClient = {
     api.post<ConversationPapersState>(
       `/conversations/${conversationId}/papers/deactivate`,
       { canonical_id: canonicalId }
+    ),
+  updateConversationPaperSectionFilter: (
+    conversationId: string,
+    canonicalId: string,
+    sectionIds: string[]
+  ) =>
+    api.post<ConversationPapersState>(
+      `/conversations/${conversationId}/papers/section-filter`,
+      { canonical_id: canonicalId, section_ids: sectionIds }
     ),
   uploadConversationPdfFiles: async (conversationId: string, files: File[]) => {
     const formData = new FormData()

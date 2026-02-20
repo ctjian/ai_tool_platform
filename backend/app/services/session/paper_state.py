@@ -46,6 +46,22 @@ def serialize_conversation_extra(extra: Dict[str, Any]) -> str:
     return json.dumps(normalize_state(extra), ensure_ascii=False)
 
 
+def _normalize_section_filter(raw: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    mode = str(raw.get("mode") or "selected").strip() or "selected"
+    section_ids_raw = raw.get("section_ids")
+    if not isinstance(section_ids_raw, list):
+        section_ids_raw = []
+    section_ids = [str(x).strip() for x in section_ids_raw if str(x).strip()]
+    if not section_ids:
+        return None
+    return {
+        "mode": mode,
+        "section_ids": section_ids,
+    }
+
+
 def normalize_state(extra: Dict[str, Any]) -> Dict[str, Any]:
     state = _base_state()
     if not isinstance(extra, dict):
@@ -73,6 +89,9 @@ def normalize_state(extra: Dict[str, Any]) -> Dict[str, Any]:
                     "origin_name": str(item.get("origin_name") or "").strip(),
                     "last_seen_at": str(item.get("last_seen_at") or "").strip() or _now_iso(),
                 }
+                section_filter = _normalize_section_filter(item.get("section_filter"))
+                if section_filter:
+                    normalized_registry[cid]["section_filter"] = section_filter
             state["papers"]["registry"] = normalized_registry
 
         active_ids = papers.get("active_ids")
@@ -106,6 +125,7 @@ def upsert_registry_entries(
         if not canonical_id:
             continue
         existing = registry.get(canonical_id, {})
+        section_filter = _normalize_section_filter(entry.get("section_filter")) or existing.get("section_filter")
         merged = {
             "canonical_id": canonical_id,
             "paper_id": str(entry.get("paper_id") or existing.get("paper_id") or canonical_id).strip(),
@@ -117,6 +137,8 @@ def upsert_registry_entries(
             "origin_name": str(entry.get("origin_name") or existing.get("origin_name") or "").strip(),
             "last_seen_at": now,
         }
+        if section_filter:
+            merged["section_filter"] = section_filter
         registry[canonical_id] = merged
     return state
 
@@ -188,6 +210,7 @@ def list_papers_from_extra(extra: Dict[str, Any]) -> Dict[str, Any]:
                 "source_type": item.get("source_type") or "arxiv",
                 "origin_name": item.get("origin_name") or "",
                 "last_seen_at": item.get("last_seen_at"),
+                "section_filter": item.get("section_filter"),
                 "is_active": canonical_id in active_set,
             }
         )

@@ -8,7 +8,7 @@ import MessageList from './MessageList'
 import ChatInput from './ChatInput'
 import { Plus, Download, ChevronDown, Check, FileText, X, Copy, AlertCircle, Library, Trash2 } from 'lucide-react'
 import { addToast } from './ui'
-import { ConversationPapersState, Message } from '../types/api'
+import { ConversationPapersState, Message, PaperSection } from '../types/api'
 
 interface ImageFile {
   file: File
@@ -141,6 +141,9 @@ function ChatWindow() {
     active_ids: [],
     papers: [],
   })
+  const [paperSections, setPaperSections] = useState<Record<string, { ready: boolean; sections: PaperSection[] }>>({})
+  const [paperSectionsOpen, setPaperSectionsOpen] = useState<Record<string, boolean>>({})
+  const [paperSectionsLoading, setPaperSectionsLoading] = useState<Record<string, boolean>>({})
   const [selectedVendor, setSelectedVendor] = useState<string>('')
   const vendorOffsetPx = useMemo(() => {
     if (availableModelGroups.length === 0) return 0
@@ -190,6 +193,66 @@ function ChatWindow() {
     }
   }, [])
 
+  const loadPaperSections = useCallback(async (canonicalId: string) => {
+    if (!currentConversation?.id) return
+    if (paperSections[canonicalId]) return
+    if (paperSectionsLoading[canonicalId]) return
+    setPaperSectionsLoading((prev) => ({ ...prev, [canonicalId]: true }))
+    try {
+      const res = await apiClient.getConversationPaperSections(currentConversation.id, canonicalId)
+      const payload = res.data || { ready: false, sections: [] }
+      setPaperSections((prev) => ({
+        ...prev,
+        [canonicalId]: {
+          ready: Boolean(payload.ready),
+          sections: Array.isArray(payload.sections) ? payload.sections : [],
+        },
+      }))
+    } catch (error) {
+      console.error('Failed to load paper sections:', error)
+      addToast('加载章节失败', 'error')
+    } finally {
+      setPaperSectionsLoading((prev) => ({ ...prev, [canonicalId]: false }))
+    }
+  }, [currentConversation?.id, paperSections, paperSectionsLoading])
+
+  const handleToggleSections = useCallback((canonicalId: string) => {
+    setPaperSectionsOpen((prev) => {
+      const next = !prev[canonicalId]
+      return { ...prev, [canonicalId]: next }
+    })
+    if (!paperSections[canonicalId]) {
+      void loadPaperSections(canonicalId)
+    }
+  }, [paperSections, loadPaperSections])
+
+  const handleSectionSelectionChange = useCallback(async (
+    canonicalId: string,
+    sectionId: string,
+    checked: boolean
+  ) => {
+    if (!currentConversation?.id) return
+    const paper = paperState.papers.find((p) => p.canonical_id === canonicalId)
+    if (!paper) return
+    const current = new Set(paper.section_filter?.section_ids || [])
+    if (checked) {
+      current.add(sectionId)
+    } else {
+      current.delete(sectionId)
+    }
+    try {
+      const res = await apiClient.updateConversationPaperSectionFilter(
+        currentConversation.id,
+        canonicalId,
+        Array.from(current)
+      )
+      setPaperState(res.data || { active_ids: [], papers: [] })
+    } catch (error) {
+      console.error('Failed to update section filter:', error)
+      addToast('章节筛选更新失败', 'error')
+    }
+  }, [currentConversation?.id, paperState.papers])
+
   const handleDeactivatePaper = useCallback(async (canonicalId: string) => {
     if (!currentConversation?.id) return
     try {
@@ -229,6 +292,12 @@ function ChatWindow() {
   useEffect(() => {
     isStreamingRef.current = isStreaming
   }, [isStreaming])
+
+  useEffect(() => {
+    setPaperSections({})
+    setPaperSectionsOpen({})
+    setPaperSectionsLoading({})
+  }, [currentConversation?.id])
 
   useEffect(() => {
     const container = messagesContainerRef.current
@@ -1403,64 +1472,122 @@ function ChatWindow() {
             <div className="text-sm text-gray-500">当前会话还没有论文资源。</div>
           )}
           <div className="space-y-3">
-            {paperState.papers.map((paper) => (
-              <div
-                key={paper.canonical_id}
-                className={`rounded-xl border bg-white p-3 transition hover:border-gray-300 hover:shadow-sm ${
-                  focusedPaperId === paper.canonical_id
-                    ? 'paper-focus-animate border-emerald-400 ring-2 ring-emerald-100'
-                    : 'border-gray-200'
-                }`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <a
-                      href={paper.pdf_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-sm font-semibold text-gray-900 hover:underline break-all"
-                    >
-                      {paper.filename}
-                    </a>
-                    <p className="mt-1 text-xs text-gray-500 break-all">
-                      {paper.title || (paper.source_type === 'upload_pdf' ? (paper.origin_name || paper.filename) : `arXiv:${paper.paper_id}`)}
-                    </p>
-                    <p className="mt-2 text-[11px] text-gray-400">
-                      {paper.source_type === 'upload_pdf' ? `upload:${paper.paper_id}` : `arXiv:${paper.paper_id}`}
-                    </p>
+            {paperState.papers.map((paper) => {
+              const sectionInfo = paperSections[paper.canonical_id]
+              const sectionsOpen = Boolean(paperSectionsOpen[paper.canonical_id])
+              const sectionLoading = Boolean(paperSectionsLoading[paper.canonical_id])
+              const selectedSectionIds = new Set(paper.section_filter?.section_ids || [])
+              const selectedCount = selectedSectionIds.size
+
+              return (
+                <div
+                  key={paper.canonical_id}
+                  className={`rounded-xl border bg-white p-3 transition hover:border-gray-300 hover:shadow-sm ${
+                    focusedPaperId === paper.canonical_id
+                      ? 'paper-focus-animate border-emerald-400 ring-2 ring-emerald-100'
+                      : 'border-gray-200'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <a
+                        href={paper.pdf_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sm font-semibold text-gray-900 hover:underline break-all"
+                      >
+                        {paper.filename}
+                      </a>
+                      <p className="mt-1 text-xs text-gray-500 break-all">
+                        {paper.title || (paper.source_type === 'upload_pdf' ? (paper.origin_name || paper.filename) : `arXiv:${paper.paper_id}`)}
+                      </p>
+                      <p className="mt-2 text-[11px] text-gray-400">
+                        {paper.source_type === 'upload_pdf' ? `upload:${paper.paper_id}` : `arXiv:${paper.paper_id}`}
+                      </p>
+                    </div>
+                    <div className="flex flex-col items-end gap-1">
+                      <button
+                        type="button"
+                        onClick={() => handleDeletePaper(paper.canonical_id)}
+                        className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50 hover:text-gray-800"
+                        title="彻底删除资源"
+                      >
+                        <Trash2 size={12} />
+                        删除
+                      </button>
+                      <label className="inline-flex cursor-pointer items-center">
+                        <input
+                          type="checkbox"
+                          checked={paper.is_active}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              handleActivatePaper(paper.canonical_id)
+                            } else {
+                              handleDeactivatePaper(paper.canonical_id)
+                            }
+                          }}
+                          className="peer sr-only"
+                        />
+                        <span className="relative h-6 w-11 rounded-full bg-gray-200 transition peer-checked:bg-emerald-500 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-200 after:absolute after:left-0.5 after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:after:translate-x-5" />
+                      </label>
+                      <span className={`text-[11px] ${paper.is_active ? 'text-emerald-600' : 'text-gray-400'}`}>
+                        {paper.is_active ? '已激活' : '未激活'}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex flex-col items-end gap-1">
-                    <button
-                      type="button"
-                      onClick={() => handleDeletePaper(paper.canonical_id)}
-                      className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50 hover:text-gray-800"
-                      title="彻底删除资源"
-                    >
-                      <Trash2 size={12} />
-                      删除
-                    </button>
-                    <label className="inline-flex cursor-pointer items-center">
-                      <input
-                        type="checkbox"
-                        checked={paper.is_active}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            handleActivatePaper(paper.canonical_id)
-                          } else {
-                            handleDeactivatePaper(paper.canonical_id)
-                          }
-                        }}
-                        className="peer sr-only"
-                      />
-                      <span className="relative h-6 w-11 rounded-full bg-gray-200 transition peer-checked:bg-emerald-500 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-200 after:absolute after:left-0.5 after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:after:translate-x-5" />
-                    </label>
-                    <span className={`text-[11px] ${paper.is_active ? 'text-emerald-600' : 'text-gray-400'}`}>
-                      {paper.is_active ? '已激活' : '未激活'}
-                    </span>
-                  </div>
+
+                  {paper.is_active && (
+                    <div className="mt-3 border-t border-gray-100 pt-3">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleSections(paper.canonical_id)}
+                        className="text-xs text-gray-600 hover:text-gray-900"
+                      >
+                        {sectionsOpen ? '收起章节筛选' : '展开章节筛选'}
+                      </button>
+                      {sectionsOpen && (
+                        <div className="mt-2 space-y-2">
+                          {sectionLoading && (
+                            <div className="text-xs text-gray-400">加载章节中...</div>
+                          )}
+                          {!sectionLoading && (!sectionInfo?.ready || (sectionInfo.sections || []).length === 0) && (
+                            <div className="text-xs text-gray-400">未识别到章节，暂不支持选择。</div>
+                          )}
+                          {!sectionLoading && sectionInfo?.ready && (sectionInfo.sections || []).length > 0 && (
+                            <div className="max-h-48 overflow-y-auto space-y-1">
+                              {sectionInfo.sections.map((sec) => {
+                                const checked = selectedSectionIds.has(sec.section_id)
+                                return (
+                                  <label key={sec.section_id} className="flex items-center gap-2 text-xs text-gray-700">
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={(e) =>
+                                        handleSectionSelectionChange(
+                                          paper.canonical_id,
+                                          sec.section_id,
+                                          e.target.checked
+                                        )
+                                      }
+                                    />
+                                    <span className="truncate">{sec.title}</span>
+                                  </label>
+                                )
+                              })}
+                            </div>
+                          )}
+                          {selectedCount > 0 && (
+                            <div className="text-[11px] text-emerald-600">
+                              已选 {selectedCount} 个章节，回答将跳过检索。
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       </div>

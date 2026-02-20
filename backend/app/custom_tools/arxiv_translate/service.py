@@ -24,6 +24,9 @@ from app.custom_tools.arxiv_translate.compiler import (
     compile_latex_project,
     copy_file,
     ensure_ctex_support,
+    ensure_hyperref_driver_sanitized,
+    ensure_hyperref_xetex,
+    ensure_pdftex_compat,
 )
 from app.custom_tools.arxiv_translate.defaults import (
     DEFAULT_CHUNK_MAX_TOKENS,
@@ -871,6 +874,11 @@ async def _run_job(job_id: str) -> None:
             if injected:
                 _append_step(job, key="prepare_chinese", status="done", message="已自动注入 ctex 中文支持。")
                 _persist_job(job)
+            hyperref_forced = await asyncio.to_thread(ensure_hyperref_xetex, main_tex_abs)
+            if hyperref_forced:
+                _append_step(job, key="prepare_hyperref", status="done", message="已强制 hyperref 使用 XeTeX 驱动。")
+                _persist_job(job)
+            await asyncio.to_thread(ensure_hyperref_driver_sanitized, paths.translated_dir)
 
         _append_step(job, key="compile", status="running", message="正在编译翻译后的 PDF ...")
         _persist_job(job)
@@ -886,12 +894,18 @@ async def _run_job(job_id: str) -> None:
             else:
                 raise RuntimeError("中文翻译编译需要 xelatex，但当前环境未安装 xelatex。")
 
+        if force_compiler == "xelatex":
+            await asyncio.to_thread(ensure_pdftex_compat, paths.translated_dir)
+
         for attempt in range(1, max_compile_tries + 1):
             if job.get("_cancel_requested"):
                 raise asyncio.CancelledError()
 
             if _is_chinese_target(translator_cfg.target_language):
                 await asyncio.to_thread(ensure_ctex_support, paths.translated_dir / main_tex_rel)
+                await asyncio.to_thread(ensure_hyperref_xetex, paths.translated_dir / main_tex_rel)
+                await asyncio.to_thread(ensure_hyperref_driver_sanitized, paths.translated_dir)
+                await asyncio.to_thread(ensure_pdftex_compat, paths.translated_dir)
 
             job["meta"]["compile_attempts"] = attempt
             _append_step(
