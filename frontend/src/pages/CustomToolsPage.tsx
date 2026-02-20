@@ -31,10 +31,6 @@ interface PdfLinkCitationMeta {
 const ARXIV_DEFAULT_EXTRA_PROMPT = [
   'If the term "agent" appears, translate it as "智能体"; "policy" as "策略"; "reward model" as "奖励模型"; "alignment" as "对齐".',
   "Keep abbreviations unchanged at first mention, and append Chinese in parentheses (e.g., Distributionally Robust Optimization (DRO，分布鲁棒优化)).",
-  "Keep model names and benchmark names in English (e.g., GPT, Llama, MMLU, HellaSwag).",
-  "Do not modify LaTeX commands, equations, citation keys, labels, refs, or environment names.",
-  "Keep all numbers, percentages, units, and variable symbols unchanged.",
-  "Use formal and concise academic Chinese; avoid colloquial wording.",
 ].join('\n')
 const ARXIV_DEFAULT_MODEL = 'gpt-4o-mini'
 const BIB_PRIORITY_FIELDS = [

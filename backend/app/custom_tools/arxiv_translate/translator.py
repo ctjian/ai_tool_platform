@@ -41,6 +41,12 @@ def _build_messages(chunk: str, target_language: str, extra_instruction: str) ->
             "Below is a section from an English academic paper, translate it into Chinese. "
             + more_requirement
             + r"Do not modify any latex command such as \section, \cite, \begin, \item and equations. "
+            + r"Do not modify inline math between $...$ or \\(...\\); keep them exactly as-is."
+            + r"Keep all numbers, percentages, units, and variable symbols unchanged."
+            + r"Keep model names and benchmark names in English (e.g., GPT, Llama, MMLU, HellaSwag)."
+            + r"Do not modify LaTeX commands, equations, citation keys, labels, refs, or environment names."
+            + r"Keep all numbers, percentages, units, and variable symbols unchanged."
+            + r"Use formal and concise academic Chinese; avoid colloquial wording."
             + r"Answer me only with the translated text:"
             + f"\n\n{chunk}"
         )
