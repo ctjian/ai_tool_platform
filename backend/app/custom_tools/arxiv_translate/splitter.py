@@ -248,6 +248,18 @@ def _build_translation_mask(text: str) -> List[bool]:
     for pattern, flags, max_lines in preserve_rules:
         _mark_pattern(text, mask, pattern, flags=flags, value=False, max_lines=max_lines)
 
+<<<<<<< ours
+    begin_macros, end_macros = _discover_math_env_macros(text, macro_sources=macro_sources)
+    for env in sorted(begin_macros.keys()):
+        if env not in end_macros:
+            continue
+        for begin_name in sorted(begin_macros[env]):
+            for end_name in sorted(end_macros[env]):
+                pattern = rf"\\{re.escape(begin_name)}\\b.*?\\{re.escape(end_name)}\\b"
+                _mark_pattern(text, mask, pattern, flags=re.DOTALL, value=False, max_lines=None)
+
+=======
+>>>>>>> theirs
     # Re-enable abstract/caption bodies for translation.
     _unmask_group(
         text,

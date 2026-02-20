@@ -40,22 +40,19 @@ def _build_messages(chunk: str, target_language: str, extra_instruction: str) ->
         user_prompt = (
             "Below is a section from an English academic paper, translate it into Chinese. "
             + more_requirement
-            + r"Do not modify any latex command such as \section, \cite, \begin, \item and equations. "
-            + r"Do not modify inline math between $...$ or \\(...\\); keep them exactly as-is."
+            + r"Do not modify any LaTeX commands or environments (e.g., \section, \subsection, \subsubsection, \label, \ref, \eqref, \autoref, \cite, \begin{...}, \end{...}, \item, \caption) or any math content ($...$, \( ... \), \[ ... \], $$...$$). "
             + r"Keep all numbers, percentages, units, and variable symbols unchanged."
             + r"Keep model names and benchmark names in English (e.g., GPT, Llama, MMLU, HellaSwag)."
-            + r"Do not modify LaTeX commands, equations, citation keys, labels, refs, or environment names."
-            + r"Keep all numbers, percentages, units, and variable symbols unchanged."
             + r"Use formal and concise academic Chinese; avoid colloquial wording."
-            + r"Answer me only with the translated text:"
+            + r"Answer me only with the translated text, without adding any explanation or extra content."
             + f"\n\n{chunk}"
         )
     else:
         user_prompt = (
             f"Below is a section from an English academic paper, translate it into {target or 'the target language'}. "
             + more_requirement
-            + r"Do not modify any latex command such as \section, \cite, \begin, \item and equations. "
-            + r"Answer me only with the translated text:"
+            + r"Do not modify any LaTeX commands or environments (e.g., \section, \subsection, \subsubsection, \label, \ref, \eqref, \autoref, \cite, \begin{...}, \end{...}, \item, \caption) or any math content ($...$, \( ... \), \[ ... \], $$...$$). "
+            + r"Answer me only with the translated text, without adding any explanation or extra content."
             + f"\n\n{chunk}"
         )
     return [

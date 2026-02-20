@@ -405,6 +405,80 @@ def _copy_project_tree(src_root: Path, dst_root: Path) -> None:
     shutil.copytree(src_root, dst_root)
 
 
+def _collect_preamble_tex_files(project_root: Path, main_tex_rel: Path) -> set[str]:
+    """
+    Identify tex files included before \\begin{document} in the main tex.
+    These files belong to the preamble and should not be translated.
+    """
+    main_tex = project_root / main_tex_rel
+    if not main_tex.exists():
+        return set()
+
+    try:
+        raw = main_tex.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return set()
+
+    text = strip_latex_comments(raw)
+    begin_doc = re.search(r"\\begin\{document\}", text)
+    preamble_text = text[: begin_doc.start()] if begin_doc else text
+
+    pattern = re.compile(r"\\(?:input|include)\s*\{([^}]+)\}")
+    queue: list[str] = []
+    for m in pattern.finditer(preamble_text):
+        name = (m.group(1) or "").strip()
+        if name:
+            queue.append(name)
+
+    collected: set[str] = set()
+    visited: set[str] = set()
+
+    def _normalize_tex_name(name: str) -> str:
+        if name.lower().endswith(".tex"):
+            return name
+        return f"{name}.tex"
+
+    while queue:
+        name = queue.pop()
+        if name in visited:
+            continue
+        visited.add(name)
+        tex_name = _normalize_tex_name(name)
+        candidate = project_root / tex_name
+        if not candidate.exists():
+            matches = list(project_root.rglob(tex_name))
+            if matches:
+                candidate = matches[0]
+            else:
+                continue
+        rel = candidate.relative_to(project_root).as_posix()
+        if rel in collected:
+            continue
+        collected.add(rel)
+
+        try:
+            sub_text = strip_latex_comments(candidate.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            continue
+        for m in pattern.finditer(sub_text):
+            sub_name = (m.group(1) or "").strip()
+            if sub_name:
+                queue.append(sub_name)
+
+    return collected
+
+
+def _copy_precompile_tex_files(*, src_root: Path, output_dir: Path) -> None:
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for tex_path in src_root.rglob("*.tex"):
+        rel = tex_path.relative_to(src_root)
+        dst = output_dir / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(tex_path, dst)
+
+
 def _assemble_segments(segments: list[dict]) -> str:
     return "".join(seg["current"] for seg in segments)
 
@@ -733,6 +807,7 @@ async def _run_job(job_id: str) -> None:
         main_tex_rel = await asyncio.to_thread(find_main_tex_file, project_root, tex_files)
         job["meta"]["main_tex"] = str(main_tex_rel)
         job["meta"]["tex_files"] = len(tex_files)
+        preamble_tex_files = _collect_preamble_tex_files(project_root, main_tex_rel)
         paper_title = await asyncio.to_thread(_extract_paper_title_from_main_tex, project_root, main_tex_rel)
         if paper_title:
             job["meta"]["paper_title"] = paper_title
@@ -759,8 +834,20 @@ async def _run_job(job_id: str) -> None:
         total_chunks = 0
         for rel in tex_files:
             raw_content = (project_root / rel).read_text(encoding="utf-8", errors="ignore")
-            content = strip_latex_comments(raw_content)
-            segments = build_translation_segments(content, max_tokens=chunk_max_tokens)
+            rel_key = rel.as_posix()
+            if rel_key in preamble_tex_files:
+                line_count = raw_content.count("\n")
+                segments = [
+                    LatexSegment(
+                        text=raw_content,
+                        translatable=False,
+                        start_line=1,
+                        end_line=1 + line_count,
+                    )
+                ]
+            else:
+                content = strip_latex_comments(raw_content)
+                segments = build_translation_segments(content, max_tokens=chunk_max_tokens)
             planned_segments[rel.as_posix()] = segments
             total_chunks += sum(1 for s in segments if s.translatable and s.text.strip())
 
@@ -791,10 +878,23 @@ async def _run_job(job_id: str) -> None:
             dst_file = paths.translated_dir / rel
             dst_file.parent.mkdir(parents=True, exist_ok=True)
 
-            segments = planned_segments.get(rel.as_posix())
+            rel_key = rel.as_posix()
+            segments = planned_segments.get(rel_key)
             if segments is None:
-                source_text = strip_latex_comments(src_file.read_text(encoding="utf-8", errors="ignore"))
-                segments = build_translation_segments(source_text, max_tokens=chunk_max_tokens)
+                if rel_key in preamble_tex_files:
+                    raw_text = src_file.read_text(encoding="utf-8", errors="ignore")
+                    line_count = raw_text.count("\n")
+                    segments = [
+                        LatexSegment(
+                            text=raw_text,
+                            translatable=False,
+                            start_line=1,
+                            end_line=1 + line_count,
+                        )
+                    ]
+                else:
+                    source_text = strip_latex_comments(src_file.read_text(encoding="utf-8", errors="ignore"))
+                    segments = build_translation_segments(source_text, max_tokens=chunk_max_tokens)
 
             state_segments: list[dict] = []
             chunks: list[str] = []
@@ -896,6 +996,16 @@ async def _run_job(job_id: str) -> None:
 
         if force_compiler == "xelatex":
             await asyncio.to_thread(ensure_pdftex_compat, paths.translated_dir)
+
+        _append_step(job, key="snapshot", status="running", message="正在保存编译前 tex 版本...")
+        _persist_job(job)
+        await asyncio.to_thread(
+            _copy_precompile_tex_files,
+            src_root=paths.translated_dir,
+            output_dir=paths.output_dir / "precompile_tex",
+        )
+        _append_step(job, key="snapshot", status="done", message="已保存编译前 tex 版本。")
+        _persist_job(job)
 
         for attempt in range(1, max_compile_tries + 1):
             if job.get("_cancel_requested"):
@@ -1002,6 +1112,12 @@ async def _run_job(job_id: str) -> None:
             artifact_payload(file_path=translated_pdf, paths=paths, static_prefix=STATIC_PREFIX),
             artifact_payload(file_path=output_zip, paths=paths, static_prefix=STATIC_PREFIX),
         ]
+        precompile_dir = paths.output_dir / "precompile_tex"
+        if precompile_dir.exists():
+            for tex_path in sorted(precompile_dir.rglob("*.tex")):
+                artifacts.append(
+                    artifact_payload(file_path=tex_path, paths=paths, static_prefix=STATIC_PREFIX)
+                )
         compile_log = paths.output_dir / "compile.log"
         if compile_log.exists():
             artifacts.append(artifact_payload(file_path=compile_log, paths=paths, static_prefix=STATIC_PREFIX))
