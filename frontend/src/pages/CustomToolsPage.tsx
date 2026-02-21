@@ -475,8 +475,6 @@ export const CustomToolsPage = () => {
       } else if (selectedTool.id === 'arxiv-latex-translate') {
         const res = await apiClient.createArxivTranslateJob({
           input_text: arxivInput.trim(),
-          api_key: apiConfig.api_key || undefined,
-          base_url: apiConfig.base_url || undefined,
           model: arxivModel || arxivDefaultModel || ARXIV_DEFAULT_MODEL,
           target_language: arxivTargetLang,
           extra_prompt: arxivExtraPrompt,
@@ -1089,7 +1087,7 @@ export const CustomToolsPage = () => {
                     />
                     允许缓存（命中同论文历史结果时可快速返回）
                   </label>
-                  {!apiConfig.api_key && !hasBackendApiKey && (
+                  {!hasBackendApiKey && (
                     <div className="text-xs text-yellow-700">
                       未检测到 API Key；请先在后端 .env 配置 OPENAI_API_KEY。
                     </div>

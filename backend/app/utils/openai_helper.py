@@ -37,9 +37,9 @@ async def stream_chat_completion(
         "timeout": Timeout(float(settings.OPENAI_TIMEOUT_SEC)),
     }
     
-    # 如果提供了base_url，设置它
-    if api_config.base_url:
-        client_kwargs["base_url"] = api_config.base_url
+    base_url = api_config.base_url or settings.OPENAI_BASE_URL
+    if base_url:
+        client_kwargs["base_url"] = base_url
     
     client = AsyncOpenAI(**client_kwargs)
     
@@ -200,7 +200,7 @@ async def test_openai_connection(
         "timeout": Timeout(float(settings.OPENAI_TIMEOUT_SEC)),
     }
     
-    # 如果提供了base_url，设置它
+    base_url = base_url or settings.OPENAI_BASE_URL
     if base_url:
         client_kwargs["base_url"] = base_url
     
@@ -302,6 +302,7 @@ async def generate_title_for_conversation(messages: list, api_config=None) -> st
         "timeout": Timeout(float(settings.OPENAI_TIMEOUT_SEC)),
     }
     
+    base_url = base_url or settings.OPENAI_BASE_URL
     if base_url:
         client_kwargs["base_url"] = base_url
     

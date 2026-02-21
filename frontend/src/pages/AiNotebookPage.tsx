@@ -245,8 +245,6 @@ export const AiNotebookPage = () => {
       const res = await apiClient.generateNotebookNote({
         draft,
         model: noteModel,
-        api_key: apiConfig.api_key || '',
-        base_url: apiConfig.base_url || '',
         available_tags: createPresetTags,
       })
       const generated = res.data
@@ -289,8 +287,6 @@ export const AiNotebookPage = () => {
       const response = await apiClient.notebookQaStream({
         query,
         model: qaModel,
-        api_key: apiConfig.api_key || '',
-        base_url: apiConfig.base_url || '',
       }, controller.signal)
 
       let streamTerminated = false

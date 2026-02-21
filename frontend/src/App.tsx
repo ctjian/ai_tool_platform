@@ -84,11 +84,6 @@ function App() {
             }
           }
           
-          // 如果前端localStorage没有配置，使用后端默认值
-          if (!apiConfig.api_key && has_api_key) {
-            // 不需要真的设置 api_key，只需要标记后端有配置
-            // 后端会自动使用 .env 中的配置
-          }
         } catch (error) {
           console.error('Failed to load default config:', error)
         }
