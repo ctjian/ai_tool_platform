@@ -89,9 +89,6 @@ function App() {
             // 不需要真的设置 api_key，只需要标记后端有配置
             // 后端会自动使用 .env 中的配置
           }
-          if (!localStorage.getItem('apiConfigBaseUrl')) {
-            setApiConfig({ base_url })
-          }
         } catch (error) {
           console.error('Failed to load default config:', error)
         }

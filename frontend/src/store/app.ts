@@ -27,7 +27,6 @@ interface AppState {
   sidebarOpen: boolean
   loading: boolean
   chatLoading: boolean
-  apiKey: string
   apiConfig: APIConfig
   hasBackendApiKey: boolean  // 后端是否配置了API Key
   versionIndices: Record<string, number>  // 记录每条消息选中的版本索引
@@ -45,7 +44,6 @@ interface AppState {
   setSidebarOpen: (open: boolean) => void
   setLoading: (loading: boolean) => void
   setChatLoading: (loading: boolean) => void
-  setApiKey: (key: string) => void
   setApiConfig: (config: Partial<APIConfig>) => void
   setHasBackendApiKey: (has: boolean) => void
   setVersionIndices: (indices: Record<string, number>) => void
@@ -67,11 +65,10 @@ export const useAppStore = create<AppState>((set) => ({
   sidebarOpen: true,
   loading: false,
   chatLoading: false,
-  apiKey: localStorage.getItem('apiKey') || '',
   hasBackendApiKey: false,
   apiConfig: {
-    api_key: localStorage.getItem('apiKey') || '',
-    base_url: localStorage.getItem('apiConfigBaseUrl') || 'https://api.yunwu.ai/v1',
+    api_key: '',
+    base_url: '',
     model: localStorage.getItem('apiConfigModel') || 'gpt-4o-mini',
     temperature: parseFloat(localStorage.getItem('apiConfigTemperature') || '0.7'),
     max_tokens: parseInt(localStorage.getItem('apiConfigMaxTokens') || '2000'),
@@ -101,20 +98,10 @@ export const useAppStore = create<AppState>((set) => ({
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
   setLoading: (loading) => set({ loading }),
   setChatLoading: (loading) => set({ chatLoading: loading }),
-  setApiKey: (key) => {
-    if (key) {
-      localStorage.setItem('apiKey', key)
-    } else {
-      localStorage.removeItem('apiKey')
-    }
-    set({ apiKey: key })
-  },
   setApiConfig: (config) => {
     set((state) => {
       const newConfig = { ...state.apiConfig, ...config }
       // 同时保存到 localStorage
-      if (config.api_key !== undefined) localStorage.setItem('apiKey', config.api_key)
-      if (config.base_url !== undefined) localStorage.setItem('apiConfigBaseUrl', config.base_url)
       if (config.model !== undefined) localStorage.setItem('apiConfigModel', config.model)
       if (config.temperature !== undefined) localStorage.setItem('apiConfigTemperature', String(config.temperature))
       if (config.max_tokens !== undefined) localStorage.setItem('apiConfigMaxTokens', String(config.max_tokens))

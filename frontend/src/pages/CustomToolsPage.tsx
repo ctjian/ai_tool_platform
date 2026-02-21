@@ -1091,7 +1091,7 @@ export const CustomToolsPage = () => {
                   </label>
                   {!apiConfig.api_key && !hasBackendApiKey && (
                     <div className="text-xs text-yellow-700">
-                      未检测到 API Key；请先在设置页配置，或在后端 .env 配置 OPENAI_API_KEY。
+                      未检测到 API Key；请先在后端 .env 配置 OPENAI_API_KEY。
                     </div>
                   )}
                   <div className="text-xs text-gray-500 space-y-2">

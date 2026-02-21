@@ -546,9 +546,9 @@ function ChatWindow() {
   ) => {
     if ((!messageContent.trim() && imageDataList.length === 0 && pdfFileList.length === 0) || chatLoading) return
     
-    // 检查是否有 API Key（前端或后端）
-    if (!apiConfig.api_key && !hasBackendApiKey) {
-      addToast('请先配置 API Key', 'warning')
+    // 检查是否有 API Key（后端）
+    if (!hasBackendApiKey) {
+      addToast('请先在后端环境变量中配置 API Key', 'warning')
       return
     }
     // 必须选择模型
@@ -630,8 +630,8 @@ function ChatWindow() {
         images: imageDataList,
         context_rounds: contextRounds,
         api_config: {
-          api_key: apiConfig.api_key,
-          base_url: apiConfig.base_url,
+          api_key: '',
+          base_url: '',
           model: apiConfig.model,
           temperature: apiConfig.temperature,
           max_tokens: apiConfig.max_tokens,
@@ -986,8 +986,8 @@ function ChatWindow() {
       // 在第一次回复后自动生成标题（重试时不生成）
       if (shouldAutoTitle && conversationId && conversationTitle && !retryMessageId) {
         apiClient.generateConversationTitle(conversationId, {
-          api_key: apiConfig.api_key,
-          base_url: apiConfig.base_url,
+          api_key: '',
+          base_url: '',
           model: apiConfig.model,
           temperature: apiConfig.temperature,
           max_tokens: apiConfig.max_tokens,
@@ -1056,8 +1056,8 @@ function ChatWindow() {
   // 发送消息
   const handleSendMessage = async () => {
     if ((!inputValue.trim() && images.length === 0 && pdfFiles.length === 0) || chatLoading) return
-    if (!apiConfig.api_key && !hasBackendApiKey) {
-      addToast('请先配置 API Key', 'warning')
+    if (!hasBackendApiKey) {
+      addToast('请先在后端环境变量中配置 API Key', 'warning')
       return
     }
 
@@ -1396,11 +1396,11 @@ function ChatWindow() {
               pdfFiles={pdfFiles}
               onPdfFilesChange={setPdfFiles}
             />
-            {!apiConfig.api_key && !hasBackendApiKey && (
-              <p className="text-xs text-yellow-600 mt-2 text-center">
-                ⚠️ 提示：可在设置中配置 API Key
-              </p>
-            )}
+              {!hasBackendApiKey && (
+                <p className="text-xs text-yellow-600 mt-2 text-center">
+                  ⚠️ 提示：请在后端环境变量中配置 API Key
+                </p>
+              )}
           </div>
         </div>
       ) : (
@@ -1430,9 +1430,9 @@ function ChatWindow() {
                 pdfFiles={pdfFiles}
                 onPdfFilesChange={setPdfFiles}
               />
-              {!apiConfig.api_key && !hasBackendApiKey && (
+              {!hasBackendApiKey && (
                 <p className="text-xs text-yellow-600 mt-2">
-                  ⚠️ 提示：可在设置中配置 API Key
+                  ⚠️ 提示：请在后端环境变量中配置 API Key
                 </p>
               )}
             </div>

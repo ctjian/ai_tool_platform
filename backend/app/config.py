@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = "https://api.yunwu.ai/v1"
     TITLE_MODEL: str = Field("gpt-4o-mini", validation_alias="Title_MODEL")
+    OPENAI_TIMEOUT_SEC: int = 60
 
     # 计费配置
     PRICING_FILE: str = str(Path(__file__).resolve().parents[1] / "data" / "pricing.json")

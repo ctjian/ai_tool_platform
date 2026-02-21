@@ -34,7 +34,7 @@ async def stream_chat_completion(
 
     client_kwargs = {
         "api_key": api_key,
-        "timeout": Timeout(15.0),  # 15秒超时
+        "timeout": Timeout(float(settings.OPENAI_TIMEOUT_SEC)),
     }
     
     # 如果提供了base_url，设置它
@@ -143,7 +143,7 @@ async def fetch_model_groups(
 
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=float(settings.OPENAI_TIMEOUT_SEC)) as client:
             resp = await client.get(models_url, headers=headers)
         if resp.status_code != 200:
             logger.warning("Failed to fetch models: %s %s", resp.status_code, resp.text)
@@ -197,7 +197,7 @@ async def test_openai_connection(
     """
     client_kwargs = {
         "api_key": api_key,
-        "timeout": Timeout(15.0),  # 15秒超时
+        "timeout": Timeout(float(settings.OPENAI_TIMEOUT_SEC)),
     }
     
     # 如果提供了base_url，设置它
@@ -299,7 +299,7 @@ async def generate_title_for_conversation(messages: list, api_config=None) -> st
     
     client_kwargs = {
         "api_key": api_key,
-        "timeout": Timeout(15.0),
+        "timeout": Timeout(float(settings.OPENAI_TIMEOUT_SEC)),
     }
     
     if base_url:
