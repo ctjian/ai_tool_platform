@@ -1313,7 +1313,7 @@ function ChatWindow() {
             </div>
           ) : (
             <div className="text-xs text-gray-500">
-              未加载模型列表，请确认后端已重启并配置 `OPENAI_MODELS`
+              未加载模型列表，请确认后端已配置 `OPENAI_BASE_URL` 与 `OPENAI_API_KEY`，并能访问 `/v1/models`
             </div>
           )}
         </div>

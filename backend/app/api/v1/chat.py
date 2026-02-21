@@ -18,7 +18,6 @@ from app.crud.conversation import conversation_crud, message_crud
 from app.crud.tool import tool_crud
 from app.schemas.chat import ChatRequest, StopChatRequest
 from app.utils.openai_helper import stream_chat_completion
-from app.utils.chat2api_helper import stream_chat2api_completion
 from app.utils.pricing import compute_text_cost
 from app.utils.system_prompt import get_default_system_prompt, pick_system_prompt
 from app.config import settings
@@ -451,35 +450,16 @@ async def generate_chat_stream(
             error_data = json.dumps({"error": "未提供模型，请在前端选择模型"})
             yield f"event: error\ndata: {error_data}\n\n"
             return
-        use_proxy = api_config.model in settings.proxy_models_list
-        if use_proxy and not settings.proxy_enabled:
-            error_data = json.dumps({"error": "未配置 Chat2API 代理"})
-            yield f"event: error\ndata: {error_data}\n\n"
-            return
         active_streams[conversation_id] = True
 
-        stream_iter = (
-            stream_chat2api_completion(
-                settings.PROXY_BASE_URL,
-                settings.ACCESS_TOKEN,
-                api_config.model,
-                openai_messages,
-                temperature=api_config.temperature,
-                max_tokens=api_config.max_tokens,
-                top_p=api_config.top_p,
-                frequency_penalty=api_config.frequency_penalty,
-                presence_penalty=api_config.presence_penalty,
-            )
-            if use_proxy
-            else stream_chat_completion(api_config, openai_messages)
-        )
+        stream_iter = stream_chat_completion(api_config, openai_messages)
 
         async def persist_assistant() -> Optional[Dict]:
             nonlocal assistant_saved, assistant_msg
             if assistant_saved or not full_response:
                 return None
             cost_meta: Optional[Dict] = None
-            if usage_data and not use_proxy:
+            if usage_data:
                 prompt_tokens = int(usage_data.get("prompt_tokens") or 0)
                 completion_tokens = int(usage_data.get("completion_tokens") or 0)
                 if prompt_tokens or completion_tokens:

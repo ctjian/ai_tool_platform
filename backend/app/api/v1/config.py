@@ -10,7 +10,7 @@ from app.schemas.config import (
     TestConnectionRequest,
     TestConnectionResponse,
 )
-from app.utils.openai_helper import test_openai_connection
+from app.utils.openai_helper import test_openai_connection, fetch_model_groups
 from app.config import settings
 from app.custom_tools.arxiv_translate.defaults import (
     DEFAULT_CONCURRENCY,
@@ -34,12 +34,10 @@ def mask_api_key(api_key: str) -> str:
 @router.get("/default")
 async def get_default_config():
     """获取后端默认配置（从.env读取）"""
-    model_groups = list(settings.openai_models_grouped)
-    models = list(settings.openai_models_list)
-    if settings.proxy_enabled:
-        # 让 chatgpt 分组排在最前面
-        model_groups = list(settings.proxy_models_grouped) + model_groups
-        models = list(settings.proxy_models_list) + models
+    model_groups, models = await fetch_model_groups(
+        settings.OPENAI_API_KEY,
+        settings.OPENAI_BASE_URL,
+    )
     return {
         "has_api_key": bool(settings.OPENAI_API_KEY),
         "base_url": settings.OPENAI_BASE_URL,

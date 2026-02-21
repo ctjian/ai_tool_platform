@@ -1,9 +1,10 @@
 """OpenAI辅助函数"""
 from openai import AsyncOpenAI
-from typing import AsyncGenerator, Dict, Any
+from typing import AsyncGenerator, Dict, Any, List, Tuple
 import json
 import logging
 from httpx import Timeout
+import httpx
 
 from app.schemas.chat import APIConfig
 from app.config import settings
@@ -112,6 +113,75 @@ async def stream_chat_completion(
     except Exception as e:
         error_msg = f"OpenAI API错误: {str(e)}"
         yield {"type": "error", "error": error_msg}
+
+
+def _build_models_url(base_url: str) -> str:
+    if not base_url:
+        return ""
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/v1"):
+        return f"{normalized}/models"
+    return f"{normalized}/v1/models"
+
+
+async def fetch_model_groups(
+    api_key: str,
+    base_url: str,
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """
+    从 OpenAI 兼容接口拉取模型列表并按 owned_by 分组。
+
+    Returns:
+        (model_groups, models)
+    """
+    if not api_key or not base_url:
+        return [], []
+
+    models_url = _build_models_url(base_url)
+    if not models_url:
+        return [], []
+
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(models_url, headers=headers)
+        if resp.status_code != 200:
+            logger.warning("Failed to fetch models: %s %s", resp.status_code, resp.text)
+            return [], []
+        payload = resp.json()
+    except Exception as e:
+        logger.warning("Failed to fetch models: %s", str(e))
+        return [], []
+
+    items = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return [], []
+
+    groups_by_owner: Dict[str, List[str]] = {}
+    seen_by_owner: Dict[str, set] = {}
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        model_id = item.get("id")
+        if not model_id:
+            continue
+        owner = item.get("owned_by") or "Unknown"
+        if owner not in groups_by_owner:
+            groups_by_owner[owner] = []
+            seen_by_owner[owner] = set()
+        if model_id in seen_by_owner[owner]:
+            continue
+        seen_by_owner[owner].add(model_id)
+        groups_by_owner[owner].append(str(model_id))
+
+    model_groups = [
+        {"name": owner, "models": models}
+        for owner, models in groups_by_owner.items()
+        if models
+    ]
+    models = [m for group in model_groups for m in group["models"]]
+    return model_groups, models
 
 
 async def test_openai_connection(
