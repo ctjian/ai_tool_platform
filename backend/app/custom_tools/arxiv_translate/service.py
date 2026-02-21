@@ -183,7 +183,7 @@ def _extract_paper_title_from_main_tex(project_root: Path, main_tex_rel: Path) -
     if not full.exists():
         return ""
     text = full.read_text(encoding="utf-8", errors="ignore")
-    for cmd in ["title", "icmltitle", "iclrtitle", "neuripsfinalcopytitle"]:
+    for cmd in ["title", "TITLE", "icmltitle", "iclrtitle", "neuripsfinalcopytitle"]:
         payload = _extract_command_payload(text, cmd)
         cleaned = _clean_tex_title(payload or "")
         if cleaned:
