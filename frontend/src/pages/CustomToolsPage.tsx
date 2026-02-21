@@ -291,12 +291,26 @@ export const CustomToolsPage = () => {
 
   const selectedTool = tools.find((t) => t.id === selectedToolId) || null
   const modelGroupOptions = availableModelGroups || []
-  const fallbackModelOptions = availableModels || []
+  const arxivModelGroupOptions = useMemo(
+    () => modelGroupOptions.filter((g) => g.name === '云雾'),
+    [modelGroupOptions]
+  )
+  const arxivModelSet = useMemo(() => {
+    const collected = new Set<string>()
+    arxivModelGroupOptions.forEach((group) => {
+      ;(group.models || []).forEach((model) => collected.add(model))
+    })
+    return collected
+  }, [arxivModelGroupOptions])
+  const arxivFallbackModelOptions = useMemo(() => {
+    if (arxivModelSet.size === 0) return []
+    return (availableModels || []).filter((model) => arxivModelSet.has(model))
+  }, [availableModels, arxivModelSet])
   const currentGroupModels = useMemo(() => {
-    if (!modelGroupOptions.length) return []
-    const group = modelGroupOptions.find((g) => g.name === arxivModelGroup)
+    if (!arxivModelGroupOptions.length) return []
+    const group = arxivModelGroupOptions.find((g) => g.name === arxivModelGroup)
     return group?.models || []
-  }, [modelGroupOptions, arxivModelGroup])
+  }, [arxivModelGroupOptions, arxivModelGroup])
   const displayBibOutput = useMemo(() => {
     if (!bibOutput) return null
     return reorderBibtexFields(bibOutput)
@@ -403,17 +417,17 @@ export const CustomToolsPage = () => {
   useEffect(() => {
     const preferredModel = arxivDefaultModel || ARXIV_DEFAULT_MODEL
     const currentModel = arxivModel || preferredModel || apiConfig.model || ARXIV_DEFAULT_MODEL
-    if (modelGroupOptions.length > 0) {
+    if (arxivModelGroupOptions.length > 0) {
       const matchedGroup =
-        modelGroupOptions.find((g) => g.models.includes(currentModel)) ||
-        modelGroupOptions.find((g) => g.models.includes(preferredModel)) ||
-        modelGroupOptions.find((g) => g.models.includes(apiConfig.model))
-      const nextGroup = matchedGroup?.name || modelGroupOptions[0]?.name || ''
-      if (!arxivModelGroup || !modelGroupOptions.some((g) => g.name === arxivModelGroup)) {
+        arxivModelGroupOptions.find((g) => g.models.includes(currentModel)) ||
+        arxivModelGroupOptions.find((g) => g.models.includes(preferredModel)) ||
+        arxivModelGroupOptions.find((g) => g.models.includes(apiConfig.model))
+      const nextGroup = matchedGroup?.name || arxivModelGroupOptions[0]?.name || ''
+      if (!arxivModelGroup || !arxivModelGroupOptions.some((g) => g.name === arxivModelGroup)) {
         setArxivModelGroup(nextGroup)
         return
       }
-      const groupModels = modelGroupOptions.find((g) => g.name === arxivModelGroup)?.models || []
+      const groupModels = arxivModelGroupOptions.find((g) => g.name === arxivModelGroup)?.models || []
       if (!arxivModel || !groupModels.includes(arxivModel)) {
         const nextModel = (preferredModel && groupModels.includes(preferredModel))
           ? preferredModel
@@ -425,12 +439,12 @@ export const CustomToolsPage = () => {
       return
     }
 
-    if ((!arxivModel || !fallbackModelOptions.includes(arxivModel)) && fallbackModelOptions.length > 0) {
-      const next = (preferredModel && fallbackModelOptions.includes(preferredModel))
+    if ((!arxivModel || !arxivFallbackModelOptions.includes(arxivModel)) && arxivFallbackModelOptions.length > 0) {
+      const next = (preferredModel && arxivFallbackModelOptions.includes(preferredModel))
         ? preferredModel
-        : fallbackModelOptions.includes(apiConfig.model)
+        : arxivFallbackModelOptions.includes(apiConfig.model)
           ? apiConfig.model
-          : (fallbackModelOptions.includes(currentModel) ? currentModel : fallbackModelOptions[0])
+          : (arxivFallbackModelOptions.includes(currentModel) ? currentModel : arxivFallbackModelOptions[0])
       setArxivModel(next || '')
     }
   }, [
@@ -438,8 +452,8 @@ export const CustomToolsPage = () => {
     arxivDefaultModel,
     arxivModel,
     arxivModelGroup,
-    fallbackModelOptions,
-    modelGroupOptions,
+    arxivFallbackModelOptions,
+    arxivModelGroupOptions,
   ])
 
   const handleRun = async () => {
@@ -982,7 +996,7 @@ export const CustomToolsPage = () => {
               )}
               {selectedTool.id === 'arxiv-latex-translate' && (
                 <div className="space-y-3">
-                  {modelGroupOptions.length > 0 ? (
+                  {arxivModelGroupOptions.length > 0 ? (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">模型分组</label>
@@ -991,12 +1005,12 @@ export const CustomToolsPage = () => {
                           onChange={(e) => {
                             const groupName = e.target.value
                             setArxivModelGroup(groupName)
-                            const models = modelGroupOptions.find((g) => g.name === groupName)?.models || []
+                            const models = arxivModelGroupOptions.find((g) => g.name === groupName)?.models || []
                             setArxivModel(models[0] || '')
                           }}
                           className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
                         >
-                          {modelGroupOptions.map((group) => (
+                          {arxivModelGroupOptions.map((group) => (
                             <option key={group.name} value={group.name}>
                               {group.name}
                             </option>
@@ -1026,7 +1040,7 @@ export const CustomToolsPage = () => {
                         onChange={(e) => setArxivModel(e.target.value)}
                         className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
                       >
-                        {fallbackModelOptions.map((model) => (
+                        {arxivFallbackModelOptions.map((model) => (
                           <option key={model} value={model}>
                             {model}
                           </option>
