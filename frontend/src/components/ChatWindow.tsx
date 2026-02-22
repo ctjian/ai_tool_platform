@@ -147,7 +147,7 @@ function ChatWindow() {
   const [paperSectionsLoading, setPaperSectionsLoading] = useState<Record<string, boolean>>({})
   const [selectedVendor, setSelectedVendor] = useState<string>('')
   const [thinkingSetting, setThinkingSetting] = useState(() => {
-    return localStorage.getItem('modelThinkingSetting') || ''
+    return localStorage.getItem('modelThinkingSetting') || 'none'
   })
   const vendorOffsetPx = useMemo(() => {
     if (availableModelGroups.length === 0) return 0
@@ -177,18 +177,17 @@ function ChatWindow() {
     return `${model}(${normalized})`
   }
 
-  const displayModelLabel = buildModelWithThinking(apiConfig.model)
-  const thinkingLabel = thinkingSetting || '默认'
   const thinkingOptions = [
     { value: 'none', label: '关闭' },
     { value: '', label: '默认', hint: '不强制，由模型默认策略决定' },
     { value: 'auto', label: 'auto', hint: '上游自动分配思考预算' },
-    { value: 'minimal', label: 'minimal' },
     { value: 'low', label: 'low' },
     { value: 'medium', label: 'medium' },
     { value: 'high', label: 'high' },
     { value: 'xhigh', label: 'xhigh' },
   ]
+  const displayModelLabel = apiConfig.model
+  const thinkingLabel = thinkingOptions.find((opt) => opt.value === thinkingSetting)?.label || '默认'
   const lastScrollTopRef = useRef(0)
   const isProgrammaticScrollRef = useRef(false)
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -1278,13 +1277,13 @@ function ChatWindow() {
         <div className="flex-1 flex justify-center">
           {availableModels.length > 0 ? (
             <div className="flex items-center gap-2">
-              <div className="relative inline-block">
+              <div className="relative inline-block w-[300px]">
                 <button
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-gray-200 bg-gray-50 text-sm text-gray-800 hover:bg-gray-100 transition"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-gray-200 bg-gray-50 text-sm text-gray-800 hover:bg-gray-100 transition w-full"
                   onClick={() => setIsModelMenuOpen((v) => !v)}
                 >
                   <span className="text-gray-500">选择模型</span>
-                  <span className="text-gray-900 font-medium">{displayModelLabel}</span>
+                  <span className="text-gray-900 font-medium flex-1 text-left truncate">{displayModelLabel}</span>
                   <ChevronDown size={16} className="text-gray-500" />
                 </button>
                 {isModelMenuOpen && (
@@ -1345,14 +1344,14 @@ function ChatWindow() {
                   </>
                 )}
               </div>
-              <div className="relative inline-block">
+              <div className="relative inline-block w-[180px]">
                 <button
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-gray-200 bg-gray-50 text-sm text-gray-800 hover:bg-gray-100 transition"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-gray-200 bg-gray-50 text-sm text-gray-800 hover:bg-gray-100 transition w-full"
                   onClick={() => setIsThinkingMenuOpen((v) => !v)}
                   title="在模型名末尾追加 (值) 来控制思考预算或推理等级"
                 >
                   <span className="text-gray-500">思考</span>
-                  <span className="text-gray-900 font-medium">{thinkingLabel}</span>
+                  <span className="text-gray-900 font-medium flex-1 text-left truncate">{thinkingLabel}</span>
                   <ChevronDown size={16} className="text-gray-500" />
                 </button>
                 {isThinkingMenuOpen && (

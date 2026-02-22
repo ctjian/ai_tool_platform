@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Send, Plus, X, Square, FileText } from 'lucide-react'
+import { ArrowUp, Plus, X, Square, FileText } from 'lucide-react'
 
 interface ImageFile {
   file: File
@@ -41,23 +41,46 @@ function ChatInput({
 }: ChatInputProps) {
   const containerShadowClass = loading ? 'shadow-none' : 'shadow-sm'
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [previewImage, setPreviewImage] = useState<string | null>(null)
   const prevImagesRef = useRef<ImageFile[]>([])
   const [isExpanded, setIsExpanded] = useState(false)
+  const [useTextarea, setUseTextarea] = useState(false)
   const shouldUseRounded = isExpanded || images.length > 0 || pdfFiles.length > 0
+  const MIN_TEXTAREA_HEIGHT = 40
+  const MAX_TEXTAREA_HEIGHT = 240
+  const EXPAND_THRESHOLD = 48
 
-  const adjustTextareaHeight = () => {
+  const adjustTextareaHeight = (nextValue?: string) => {
     if (!textareaRef.current) return
+    const currentValue = typeof nextValue === 'string' ? nextValue : value
+    const isEmpty = currentValue.trim().length === 0
     textareaRef.current.style.height = 'auto'
-    const newHeight = Math.min(textareaRef.current.scrollHeight, 240)
+    if (isEmpty) {
+      textareaRef.current.style.height = `${MIN_TEXTAREA_HEIGHT}px`
+      setIsExpanded(false)
+      setUseTextarea(false)
+      return
+    }
+    const newHeight = Math.min(textareaRef.current.scrollHeight, MAX_TEXTAREA_HEIGHT)
     textareaRef.current.style.height = `${newHeight}px`
-    setIsExpanded(newHeight > 48)
+    setIsExpanded(newHeight > EXPAND_THRESHOLD)
   }
 
   useEffect(() => {
-    adjustTextareaHeight()
+    adjustTextareaHeight(value)
   }, [value])
+
+  useEffect(() => {
+    if (value.includes('\n') && !useTextarea) {
+      setUseTextarea(true)
+      return
+    }
+    if (!value && useTextarea) {
+      setUseTextarea(false)
+    }
+  }, [value, useTextarea])
 
   // 统一回收已移除的预览 URL，避免 blob 404 报错
   useEffect(() => {
@@ -74,10 +97,27 @@ function ChatInput({
     prevImagesRef.current = images
   }, [images, previewImage])
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !disabled) {
       e.preventDefault()
       onSend()
+    }
+  }
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && !disabled) {
+      if (e.shiftKey) {
+        e.preventDefault()
+        const nextValue = value + '\n'
+        onChange(nextValue)
+        setUseTextarea(true)
+        window.setTimeout(() => {
+          textareaRef.current?.focus()
+          adjustTextareaHeight(nextValue)
+        }, 0)
+      } else {
+        e.preventDefault()
+        onSend()
+      }
     }
   }
 
@@ -298,23 +338,37 @@ function ChatInput({
 
           {/* 文本输入框 */}
           <div className="flex-1 relative">
-            <textarea
-              ref={textareaRef}
-              value={value}
-              onChange={(e) => {
-                onChange(e.target.value)
-                adjustTextareaHeight()
-              }}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-              placeholder="有问题，尽管问"
-              disabled={disabled || loading}
-              className={`w-full pl-2 pr-12 bg-transparent text-gray-900 resize-none focus:outline-none disabled:bg-transparent disabled:cursor-not-allowed text-base placeholder-gray-500 overflow-y-auto ${
-                isExpanded ? 'pb-10 pt-2' : 'py-2'
-              }`}
-              rows={1}
-              style={{ minHeight: '40px', maxHeight: '240px' }}
-            />
+            {useTextarea ? (
+              <textarea
+                ref={textareaRef}
+                value={value}
+                onChange={(e) => {
+                  const nextValue = e.target.value
+                  onChange(nextValue)
+                  adjustTextareaHeight(nextValue)
+                }}
+                onKeyDown={handleTextareaKeyDown}
+                onPaste={handlePaste}
+                placeholder="有问题，尽管问"
+                disabled={disabled || loading}
+                className={`w-full pl-2 pr-12 bg-transparent text-gray-900 resize-none focus:outline-none disabled:bg-transparent disabled:cursor-not-allowed text-base leading-[22px] placeholder-gray-500 overflow-y-auto ${
+                  isExpanded ? 'pb-10 pt-[9px]' : 'py-[9px]'
+                }`}
+                rows={1}
+                style={{ minHeight: '40px', maxHeight: '240px' }}
+              />
+            ) : (
+              <input
+                ref={inputRef}
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                onKeyDown={handleInputKeyDown}
+                onPaste={handlePaste}
+                placeholder="有问题，尽管问"
+                disabled={disabled || loading}
+                className="w-full h-10 pl-2 pr-12 bg-transparent text-gray-900 focus:outline-none disabled:bg-transparent disabled:cursor-not-allowed text-base leading-10 placeholder-gray-500"
+              />
+            )}
             <button
               onClick={() => {
                 if (loading && onStop) {
@@ -335,7 +389,7 @@ function ChatInput({
                   : 'bg-black hover:bg-gray-900 text-white'
               } disabled:opacity-30 disabled:cursor-not-allowed`}
             >
-              {loading ? <Square size={18} /> : <Send size={18} />}
+              {loading ? <Square size={18} /> : <ArrowUp size={18} />}
             </button>
           </div>
         </div>
