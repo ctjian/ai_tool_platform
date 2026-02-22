@@ -129,6 +129,7 @@ function ChatWindow() {
   const [pdfFiles, setPdfFiles] = useState<PdfFile[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false)
+  const [isThinkingMenuOpen, setIsThinkingMenuOpen] = useState(false)
   const [promptPanelOpen, setPromptPanelOpen] = useState(false)
   const [paperPanelOpen, setPaperPanelOpen] = useState(false)
   const [roundPromptPanelOpen, setRoundPromptPanelOpen] = useState(false)
@@ -145,6 +146,9 @@ function ChatWindow() {
   const [paperSectionsOpen, setPaperSectionsOpen] = useState<Record<string, boolean>>({})
   const [paperSectionsLoading, setPaperSectionsLoading] = useState<Record<string, boolean>>({})
   const [selectedVendor, setSelectedVendor] = useState<string>('')
+  const [thinkingSetting, setThinkingSetting] = useState(() => {
+    return localStorage.getItem('modelThinkingSetting') || ''
+  })
   const vendorOffsetPx = useMemo(() => {
     if (availableModelGroups.length === 0) return 0
     const idx = Math.max(
@@ -158,6 +162,33 @@ function ChatWindow() {
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const isStreamingRef = useRef(false)
   const autoScrollPausedRef = useRef(false)
+
+  const normalizeThinkingSetting = (value: string) => {
+    const trimmed = (value || '').trim()
+    if (!trimmed) return ''
+    const withoutLeading = trimmed.startsWith('(') ? trimmed.slice(1) : trimmed
+    const withoutTrailing = withoutLeading.endsWith(')') ? withoutLeading.slice(0, -1) : withoutLeading
+    return withoutTrailing.trim()
+  }
+
+  const buildModelWithThinking = (model: string) => {
+    const normalized = normalizeThinkingSetting(thinkingSetting)
+    if (!normalized) return model
+    return `${model}(${normalized})`
+  }
+
+  const displayModelLabel = buildModelWithThinking(apiConfig.model)
+  const thinkingLabel = thinkingSetting || '默认'
+  const thinkingOptions = [
+    { value: 'none', label: '关闭' },
+    { value: '', label: '默认', hint: '不强制，由模型默认策略决定' },
+    { value: 'auto', label: 'auto', hint: '上游自动分配思考预算' },
+    { value: 'minimal', label: 'minimal' },
+    { value: 'low', label: 'low' },
+    { value: 'medium', label: 'medium' },
+    { value: 'high', label: 'high' },
+    { value: 'xhigh', label: 'xhigh' },
+  ]
   const lastScrollTopRef = useRef(0)
   const isProgrammaticScrollRef = useRef(false)
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -632,7 +663,7 @@ function ChatWindow() {
         api_config: {
           api_key: '',
           base_url: '',
-          model: apiConfig.model,
+          model: buildModelWithThinking(apiConfig.model),
           temperature: apiConfig.temperature,
           max_tokens: apiConfig.max_tokens,
           top_p: apiConfig.top_p,
@@ -679,7 +710,9 @@ function ChatWindow() {
           }
           if (thinkingChunk) {
             next.thinking = (prev.thinking || '') + thinkingChunk
-            next.thinking_collapsed = prev.thinking_collapsed ?? true
+            if (!firstTokenReceived) {
+              next.thinking_collapsed = false
+            }
             next.thinking_done = false
           }
           updatedMsgs[msgIdx] = next
@@ -988,7 +1021,7 @@ function ChatWindow() {
         apiClient.generateConversationTitle(conversationId, {
           api_key: '',
           base_url: '',
-          model: apiConfig.model,
+          model: buildModelWithThinking(apiConfig.model),
           temperature: apiConfig.temperature,
           max_tokens: apiConfig.max_tokens,
           top_p: apiConfig.top_p,
@@ -1244,72 +1277,122 @@ function ChatWindow() {
         </div>
         <div className="flex-1 flex justify-center">
           {availableModels.length > 0 ? (
-            <div className="relative inline-block">
-              <button
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-gray-200 bg-gray-50 text-sm text-gray-800 hover:bg-gray-100 transition"
-                onClick={() => setIsModelMenuOpen((v) => !v)}
-              >
-                <span className="text-gray-500">选择模型</span>
-                <span className="text-gray-900 font-medium">{apiConfig.model}</span>
-                <ChevronDown size={16} className="text-gray-500" />
-              </button>
-              {isModelMenuOpen && (
-                <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setIsModelMenuOpen(false)}
-                  />
-                  <div className="absolute top-full mt-2 z-50">
-                    <div className="relative">
-                      <div className="bg-white border border-gray-200 rounded-lg shadow-lg min-w-44">
-                        {availableModelGroups.length > 0 ? (
-                          availableModelGroups.map((group) => (
+            <div className="flex items-center gap-2">
+              <div className="relative inline-block">
+                <button
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-gray-200 bg-gray-50 text-sm text-gray-800 hover:bg-gray-100 transition"
+                  onClick={() => setIsModelMenuOpen((v) => !v)}
+                >
+                  <span className="text-gray-500">选择模型</span>
+                  <span className="text-gray-900 font-medium">{displayModelLabel}</span>
+                  <ChevronDown size={16} className="text-gray-500" />
+                </button>
+                {isModelMenuOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setIsModelMenuOpen(false)}
+                    />
+                    <div className="absolute top-full mt-2 z-50">
+                      <div className="relative">
+                        <div className="bg-white border border-gray-200 rounded-lg shadow-lg min-w-44">
+                          {availableModelGroups.length > 0 ? (
+                            availableModelGroups.map((group) => (
+                              <button
+                                key={group.name}
+                                onClick={() => {
+                                  setSelectedVendor(group.name)
+                                  localStorage.setItem('selectedModelVendor', group.name)
+                                }}
+                                className={`w-full text-left px-4 py-2 text-sm transition flex items-center justify-between ${
+                                  selectedVendor === group.name
+                                    ? 'bg-gray-100 text-gray-900'
+                                    : 'text-gray-700 hover:bg-gray-50'
+                                }`}
+                              >
+                                <span>{group.name}</span>
+                                <ChevronDown size={14} className="text-gray-400 rotate-[-90deg]" />
+                              </button>
+                            ))
+                          ) : (
+                            <div className="px-4 py-2 text-sm text-gray-500">无分组</div>
+                          )}
+                        </div>
+                        <div
+                          className="bg-white border border-gray-200 rounded-lg shadow-lg min-w-56 absolute"
+                          style={{ top: vendorOffsetPx, left: 'calc(100% + 8px)' }}
+                        >
+                        {vendorModels.length > 0 ? (
+                          vendorModels.map((m) => (
                             <button
-                              key={group.name}
+                              key={`${selectedVendor}-${m}`}
                               onClick={() => {
-                                setSelectedVendor(group.name)
-                                localStorage.setItem('selectedModelVendor', group.name)
+                                setApiConfig({ model: m })
+                                setIsModelMenuOpen(false)
                               }}
-                              className={`w-full text-left px-4 py-2 text-sm transition flex items-center justify-between ${
-                                selectedVendor === group.name
-                                  ? 'bg-gray-100 text-gray-900'
-                                  : 'text-gray-700 hover:bg-gray-50'
-                              }`}
+                              className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition flex items-center gap-2"
                             >
-                              <span>{group.name}</span>
-                              <ChevronDown size={14} className="text-gray-400 rotate-[-90deg]" />
+                              <span className="flex-1 text-gray-900">{m}</span>
+                              {apiConfig.model === m && <Check size={16} className="text-gray-600" />}
                             </button>
                           ))
                         ) : (
-                          <div className="px-4 py-2 text-sm text-gray-500">无分组</div>
+                          <div className="px-4 py-2 text-sm text-gray-500">请选择厂商</div>
                         )}
-                      </div>
-                      <div
-                        className="bg-white border border-gray-200 rounded-lg shadow-lg min-w-56 absolute"
-                        style={{ top: vendorOffsetPx, left: 'calc(100% + 8px)' }}
-                      >
-                      {vendorModels.length > 0 ? (
-                        vendorModels.map((m) => (
-                          <button
-                            key={`${selectedVendor}-${m}`}
-                            onClick={() => {
-                              setApiConfig({ model: m })
-                              setIsModelMenuOpen(false)
-                            }}
-                            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition flex items-center gap-2"
-                          >
-                            <span className="flex-1 text-gray-900">{m}</span>
-                            {apiConfig.model === m && <Check size={16} className="text-gray-600" />}
-                          </button>
-                        ))
-                      ) : (
-                        <div className="px-4 py-2 text-sm text-gray-500">请选择厂商</div>
-                      )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </>
-              )}
+                  </>
+                )}
+              </div>
+              <div className="relative inline-block">
+                <button
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-gray-200 bg-gray-50 text-sm text-gray-800 hover:bg-gray-100 transition"
+                  onClick={() => setIsThinkingMenuOpen((v) => !v)}
+                  title="在模型名末尾追加 (值) 来控制思考预算或推理等级"
+                >
+                  <span className="text-gray-500">思考</span>
+                  <span className="text-gray-900 font-medium">{thinkingLabel}</span>
+                  <ChevronDown size={16} className="text-gray-500" />
+                </button>
+                {isThinkingMenuOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setIsThinkingMenuOpen(false)}
+                    />
+                    <div className="absolute top-full mt-2 z-50">
+                      <div className="bg-white border border-gray-200 rounded-lg shadow-lg min-w-44">
+                        {thinkingOptions.map((opt) => (
+                          <button
+                            key={opt.value || 'default'}
+                            onClick={() => {
+                              setThinkingSetting(opt.value)
+                              localStorage.setItem('modelThinkingSetting', opt.value)
+                              setIsThinkingMenuOpen(false)
+                            }}
+                            className={`w-full text-left px-4 py-2 text-sm transition flex items-start justify-between ${
+                              thinkingSetting === opt.value
+                                ? 'bg-gray-100 text-gray-900'
+                                : 'text-gray-700 hover:bg-gray-50'
+                            }`}
+                          >
+                            <span className="flex flex-col">
+                              <span>{opt.label}</span>
+                              {opt.hint && (
+                                <span className="text-xs text-gray-500">{opt.hint}</span>
+                              )}
+                            </span>
+                            {thinkingSetting === opt.value && (
+                              <Check size={16} className="text-gray-600 mt-0.5" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           ) : (
             <div className="text-xs text-gray-500">

@@ -166,6 +166,8 @@ async def fetch_model_groups(
         model_id = item.get("id")
         if not model_id:
             continue
+        if "code" in str(model_id).lower():
+            continue
         owner = item.get("owned_by") or "Unknown"
         if owner not in groups_by_owner:
             groups_by_owner[owner] = []
