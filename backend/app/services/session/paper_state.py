@@ -67,6 +67,13 @@ def normalize_state(extra: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(extra, dict):
         return state
 
+    # 保留非论文状态的扩展字段（例如会话来源标记 source/scene）。
+    # 只规范化 papers 结构，其他顶层键原样透传。
+    for key, value in extra.items():
+        if key in ("v", "papers"):
+            continue
+        state[key] = deepcopy(value)
+
     papers = extra.get("papers")
     if isinstance(papers, dict):
         registry = papers.get("registry")

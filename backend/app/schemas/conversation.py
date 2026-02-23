@@ -73,6 +73,8 @@ class ConversationBase(BaseModel):
 class ConversationCreate(BaseModel):
     """创建会话"""
     tool_id: Optional[str] = Field(None, description="关联的工具ID，为空时为通用对话模式")
+    title: Optional[str] = Field(None, min_length=1, max_length=200, description="会话标题")
+    extra: Optional[dict] = Field(None, description="会话扩展元数据")
 
 
 class ConversationUpdate(BaseModel):

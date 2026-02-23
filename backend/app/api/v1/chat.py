@@ -147,6 +147,7 @@ async def generate_chat_stream(
     retry_message_id: str = None,
     selected_versions: Optional[Dict[str, int]] = None,
     context_rounds: Optional[int] = None,
+    request_extra: Optional[Dict[str, Any]] = None,
 ) -> AsyncGenerator[str, None]:
     """生成聊天流式响应"""
 
@@ -158,6 +159,11 @@ async def generate_chat_stream(
     cancelled = False
     assistant_saved = False
     assistant_msg = None
+    user_extra_json = (
+        json.dumps(request_extra, ensure_ascii=False)
+        if isinstance(request_extra, dict) and request_extra
+        else None
+    )
 
     try:
         # 1. 获取system prompt
@@ -192,6 +198,7 @@ async def generate_chat_stream(
             if retry_user_msg:
                 retry_user_msg.content = user_message
                 retry_user_msg.images = json.dumps(user_images) if user_images else None
+                retry_user_msg.extra = user_extra_json
                 await message_crud.update(chat_db, retry_user_msg.id, retry_user_msg)
         # 通用对话：从历史 system 消息取系统提示词
         if not tool_id:
@@ -258,6 +265,15 @@ async def generate_chat_stream(
         conversation_obj = await conversation_crud.get(chat_db, conversation_id)
         conversation_extra = parse_conversation_extra(conversation_obj.extra if conversation_obj else None)
         extra_changed = False
+        if isinstance(request_extra, dict):
+            source = str(request_extra.get("source") or "").strip()
+            scene = str(request_extra.get("scene") or "").strip()
+            if source and conversation_extra.get("source") != source:
+                conversation_extra["source"] = source
+                extra_changed = True
+            if scene and conversation_extra.get("scene") != scene:
+                conversation_extra["scene"] = scene
+                extra_changed = True
 
         detected_targets = extract_arxiv_targets(user_message)
         if detected_targets:
@@ -427,7 +443,14 @@ async def generate_chat_stream(
         # 5. 如果不是重试，使用 chat_db 保存用户消息到数据库
         if not retry_message_id:
             images_json = json.dumps(user_images) if user_images else None
-            await message_crud.create(chat_db, conversation_id, "user", user_message, images_json)
+            await message_crud.create(
+                chat_db,
+                conversation_id,
+                "user",
+                user_message,
+                images_json,
+                extra=user_extra_json,
+            )
 
         # 记录本轮实际发送给模型的提示词快照（用于前端“查看提示词”）。
         assistant_extra_payload["round_prompt"] = _build_round_prompt_trace(
@@ -630,6 +653,7 @@ async def chat_stream(
             request.retry_message_id,
             request.selected_versions,
             request.context_rounds,
+            request.extra,
         ),
         media_type="text/event-stream",
         headers={

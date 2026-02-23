@@ -183,7 +183,8 @@ export interface ChatRequest {
   conversation_id: string
   tool_id: string | null
   message: string
-    images?: string[]
+  images?: string[]
+  extra?: Record<string, any>
   api_config: {
     api_key: string
     base_url?: string

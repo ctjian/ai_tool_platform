@@ -1,6 +1,6 @@
 """聊天相关的Pydantic schemas"""
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 
 
 class APIConfig(BaseModel):
@@ -22,6 +22,7 @@ class ChatRequest(BaseModel):
     tool_id: Optional[str] = Field(None, description="工具ID，为空时使用默认系统提示词")
     message: str = Field(..., min_length=1, description="用户消息")
     images: Optional[List[str]] = Field(None, description="图片base64列表")
+    extra: Optional[Dict[str, Any]] = Field(None, description="本轮用户消息扩展元数据")
     api_config: APIConfig = Field(..., description="API配置")
     context_rounds: Optional[int] = Field(
         None,

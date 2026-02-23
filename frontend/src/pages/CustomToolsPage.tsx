@@ -64,6 +64,15 @@ const QA_DEFAULT_HEIGHT = 520
 const QA_MIN_WIDTH = 280
 const QA_MIN_HEIGHT = 260
 const QA_DRAG_PADDING = 12
+const ARXIV_QA_SOURCE = 'arxiv_translate_qa'
+const ARXIV_QA_CONVERSATION_EXTRA = {
+  source: ARXIV_QA_SOURCE,
+  scene: 'compare_reader_qa',
+}
+const ARXIV_QA_MESSAGE_EXTRA = {
+  source: ARXIV_QA_SOURCE,
+  scene: 'compare_reader_qa',
+}
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -414,11 +423,19 @@ const CompareQaInputBar = ({ streaming, composerKey, onSubmit }: CompareQaInputB
   }, [composerKey])
 
   const handleSend = async () => {
-    const accepted = await onSubmit(value, images)
+    const snapshotValue = value
+    const snapshotImages = [...images]
+    // 发送后立即清空，避免流式阶段仍显示旧输入。
+    setValue('')
+    setImages([])
+
+    const accepted = await onSubmit(snapshotValue, snapshotImages)
     if (accepted) {
-      setValue('')
-      setImages([])
+      return
     }
+    // 校验失败时恢复输入，避免误清空（例如未填内容/未选模型）。
+    setValue(snapshotValue)
+    setImages(snapshotImages)
   }
 
   return (
@@ -505,6 +522,7 @@ export const CustomToolsPage = () => {
   const [compareQaConversationId, setCompareQaConversationId] = useState<string | null>(() => {
     return localStorage.getItem('arxivCompareQaConversationId')
   })
+  const [compareQaKeepBlank, setCompareQaKeepBlank] = useState(false)
   const [compareQaHistoryOpen, setCompareQaHistoryOpen] = useState(false)
   const [compareQaHistoryLoading, setCompareQaHistoryLoading] = useState(false)
   const [compareQaHistoryItems, setCompareQaHistoryItems] = useState<Conversation[]>([])
@@ -994,28 +1012,53 @@ export const CustomToolsPage = () => {
     return formatLocalDateTime(parsed)
   }
 
+  const parseConversationExtra = (raw: any): Record<string, any> | null => {
+    if (!raw) return null
+    if (typeof raw === 'object') return raw as Record<string, any>
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw)
+        return parsed && typeof parsed === 'object' ? parsed : null
+      } catch {
+        return null
+      }
+    }
+    return null
+  }
+
+  const isArxivQaConversation = (conv: Conversation): boolean => {
+    const extra = parseConversationExtra((conv as any)?.extra)
+    return Boolean(extra && extra.source === ARXIV_QA_SOURCE)
+  }
+
   const resetCompareQaSession = () => {
     qaAbortRef.current?.abort()
     setCompareQaStreaming(false)
     setCompareQaMessages([])
     setCompareQaComposerKey((prev) => prev + 1)
     setCompareQaConversationId(null)
+    setCompareQaKeepBlank(true)
     localStorage.removeItem('arxivCompareQaConversationId')
     setCompareQaHistoryOpen(false)
   }
 
-  const loadCompareQaHistory = async () => {
+  const loadCompareQaHistory = async (): Promise<Conversation[]> => {
     setCompareQaHistoryLoading(true)
     try {
       const res = await apiClient.getConversations()
       const list = res.data?.conversations || []
       setConversations(list)
-      setCompareQaHistoryItems(list)
+      const qaList = list.filter(isArxivQaConversation)
+      setCompareQaHistoryItems(qaList)
+      return qaList
     } catch (error) {
       if (conversations.length > 0) {
-        setCompareQaHistoryItems(conversations)
+        const qaList = conversations.filter(isArxivQaConversation)
+        setCompareQaHistoryItems(qaList)
+        return qaList
       }
       addToast('获取历史聊天失败', 'error')
+      return []
     } finally {
       setCompareQaHistoryLoading(false)
     }
@@ -1038,6 +1081,7 @@ export const CustomToolsPage = () => {
         }))
       setCompareQaMessages(messages)
       setCompareQaConversationId(conv.id)
+      setCompareQaKeepBlank(false)
       localStorage.setItem('arxivCompareQaConversationId', conv.id)
       setCompareQaComposerKey((prev) => prev + 1)
       if (closeHistory) {
@@ -1051,15 +1095,17 @@ export const CustomToolsPage = () => {
   }
 
   const handleSelectCompareQaHistory = async (conversationId: string) => {
+    setCompareQaKeepBlank(false)
     await loadCompareQaConversation(conversationId, true)
   }
 
   const ensureQaConversationId = async () => {
     if (compareQaConversationId) return compareQaConversationId
     const title = `对照问答 ${formatLocalDateTime(new Date())}`
-    const res = await apiClient.createConversation(null, title)
+    const res = await apiClient.createConversation(null, title, ARXIV_QA_CONVERSATION_EXTRA)
     const newId = res.data.id
     setCompareQaConversationId(newId)
+    setCompareQaKeepBlank(false)
     localStorage.setItem('arxivCompareQaConversationId', newId)
     setConversations((prev) => [res.data, ...prev])
     return newId
@@ -1194,6 +1240,7 @@ export const CustomToolsPage = () => {
         tool_id: null,
         message: content || ' ',
         images: userImages,
+        extra: ARXIV_QA_MESSAGE_EXTRA,
         context_rounds: COMPARE_QA_CONTEXT_ROUNDS,
         api_config: {
           api_key: '',
@@ -1282,7 +1329,7 @@ export const CustomToolsPage = () => {
 
   useEffect(() => {
     if (!compareQaHistoryOpen) return
-    setCompareQaHistoryItems(conversations)
+    setCompareQaHistoryItems(conversations.filter(isArxivQaConversation))
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node | null
       if (!target) return
@@ -1297,14 +1344,34 @@ export const CustomToolsPage = () => {
   useEffect(() => {
     if (compareQaOpen) return
     setCompareQaHistoryOpen(false)
+    setCompareQaKeepBlank(false)
   }, [compareQaOpen])
 
   useEffect(() => {
     if (!compareQaOpen) return
-    if (!compareQaConversationId) return
     if (compareQaMessages.length > 0) return
-    loadCompareQaConversation(compareQaConversationId, false)
-  }, [compareQaOpen, compareQaConversationId, compareQaMessages.length])
+    if (compareQaKeepBlank) return
+    let cancelled = false
+    const bootstrapHistory = async () => {
+      const qaHistory = await loadCompareQaHistory()
+      if (cancelled) return
+      const targetId =
+        compareQaConversationId && qaHistory.some((item) => item.id === compareQaConversationId)
+          ? compareQaConversationId
+          : qaHistory[0]?.id
+      if (!targetId) {
+        setCompareQaConversationId(null)
+        localStorage.removeItem('arxivCompareQaConversationId')
+        setCompareQaComposerKey((prev) => prev + 1)
+        return
+      }
+      await loadCompareQaConversation(targetId, false)
+    }
+    void bootstrapHistory()
+    return () => {
+      cancelled = true
+    }
+  }, [compareQaOpen, compareQaConversationId, compareQaMessages.length, compareQaKeepBlank])
 
   useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {

@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 from typing import Optional, List
 from datetime import datetime
 import uuid
+import json
 
 from app.models.conversation import Conversation
 from app.models.message import Message
@@ -64,12 +65,18 @@ class CRUDConversation:
     ) -> Conversation:
         """创建会话"""
         conversation_id = str(uuid.uuid4())
-        title = f"新对话 - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        title = (obj_in.title or "").strip() or f"新对话 - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        extra_json = (
+            json.dumps(obj_in.extra, ensure_ascii=False)
+            if isinstance(obj_in.extra, dict) and obj_in.extra
+            else None
+        )
         
         db_obj = Conversation(
             id=conversation_id,
             tool_id=obj_in.tool_id,
             title=title,
+            extra=extra_json,
         )
         db.add(db_obj)
         await db.commit()

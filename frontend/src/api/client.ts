@@ -58,8 +58,17 @@ export const apiClient = {
     api.delete(`/tools/${toolId}`),
   
   // 会话相关
-  createConversation: (toolId: string | null, title: string) =>
-    api.post<Conversation>('/conversations', { tool_id: toolId, title }),
+  createConversation: (
+    toolId: string | null,
+    title: string,
+    extra?: Record<string, any>
+  ) => {
+    const payload: Record<string, any> = { tool_id: toolId, title }
+    if (extra && Object.keys(extra).length > 0) {
+      payload.extra = extra
+    }
+    return api.post<Conversation>('/conversations', payload)
+  },
   getConversations: (toolId?: string) => {
     const params: { tool_id?: string } = {}
     if (toolId) {
