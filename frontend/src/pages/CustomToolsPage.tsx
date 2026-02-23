@@ -1,6 +1,6 @@
 // Review note:
 // - 新增“Arxiv论文精细翻译”自定义工具页逻辑（提交任务、轮询状态、下载产物）。
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, Input, Button, Loading, addToast } from '../components/ui'
 import { Document, Page, pdfjs } from 'react-pdf'
 import apiClient from '../api/client'
@@ -30,6 +30,12 @@ interface PdfLinkCitationMeta {
   text: string
 }
 
+interface QaImageFile {
+  file: File
+  preview: string
+  id: string
+}
+
 const ARXIV_DEFAULT_EXTRA_PROMPT = [
   'If the term "agent" appears, translate it as "智能体"; "policy" as "策略"; "reward model" as "奖励模型"; "alignment" as "对齐".',
   "Keep abbreviations unchanged at first mention, and append Chinese in parentheses (e.g., Distributionally Robust Optimization (DRO，分布鲁棒优化)).",
@@ -52,6 +58,7 @@ const DEBUG_CITATION_HOVER = false
 const COMPARE_ZOOM_MIN = 0.6
 const COMPARE_ZOOM_MAX = 2.4
 const COMPARE_ZOOM_STEP = 0.1
+const COMPARE_RENDER_BASE_WIDTH = 720
 const QA_DEFAULT_WIDTH = 420
 const QA_DEFAULT_HEIGHT = 520
 const QA_MIN_WIDTH = 280
@@ -227,6 +234,208 @@ const reorderBibtexFields = (bibtex: string) => {
   return `@${entryType}{${citeKey},\n${lines.join('\n')}\n}`
 }
 
+interface ComparePdfColumnsProps {
+  compareLeftUrl: string
+  compareRightUrl: string
+  comparePdfOptions: { withCredentials: boolean }
+  compareLeftPages: number
+  compareRightPages: number
+  compareScale: number
+  compareScrollSync: boolean
+  compareLeftLoading: boolean
+  compareRightLoading: boolean
+  leftPdfRef: React.MutableRefObject<HTMLDivElement | null>
+  rightPdfRef: React.MutableRefObject<HTMLDivElement | null>
+  onSyncScroll: (from: HTMLDivElement | null, to: HTMLDivElement | null) => void
+  onPaneClick: (event: React.MouseEvent<HTMLDivElement>) => void
+  onPaneWheel: (event: React.WheelEvent<HTMLDivElement>) => void
+  onLeftPdfLoadSuccess: (pdfDoc: any) => Promise<void> | void
+  onLeftPdfLoadError: () => void
+  onRightPdfLoadSuccess: (pdfDoc: any) => Promise<void> | void
+  onRightPdfLoadError: () => void
+}
+
+const ComparePdfColumns = memo(
+  ({
+    compareLeftUrl,
+    compareRightUrl,
+    comparePdfOptions,
+    compareLeftPages,
+    compareRightPages,
+    compareScale,
+    compareScrollSync,
+    compareLeftLoading,
+    compareRightLoading,
+    leftPdfRef,
+    rightPdfRef,
+    onSyncScroll,
+    onPaneClick,
+    onPaneWheel,
+    onLeftPdfLoadSuccess,
+    onLeftPdfLoadError,
+    onRightPdfLoadSuccess,
+    onRightPdfLoadError,
+  }: ComparePdfColumnsProps) => (
+    <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-0 lg:gap-2 p-2">
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden flex flex-col min-h-0">
+        <div className="px-3 py-2 text-xs font-medium text-gray-700 border-b border-gray-200">原文 PDF</div>
+        <div
+          ref={leftPdfRef}
+          data-compare-side="left"
+          onScroll={() => {
+            if (!compareScrollSync) return
+            onSyncScroll(leftPdfRef.current, rightPdfRef.current)
+          }}
+          onClickCapture={onPaneClick}
+          onWheel={onPaneWheel}
+          className="flex-1 min-h-0 overflow-auto bg-gray-100"
+        >
+          {compareLeftUrl && (
+            <div className="space-y-3 p-2 w-max min-w-full">
+              <Document
+                file={compareLeftUrl}
+                options={comparePdfOptions}
+                onLoadSuccess={onLeftPdfLoadSuccess}
+                onLoadError={onLeftPdfLoadError}
+                loading={null}
+                error={null}
+                noData={null}
+              >
+                {Array.from({ length: compareLeftPages }).map((_, index) => (
+                  <div
+                    key={`left-page-${index + 1}`}
+                    data-compare-page-number={index + 1}
+                    className="w-fit mx-auto bg-white border border-gray-200 rounded-sm shadow-sm"
+                  >
+                    <div
+                      style={{
+                        transform: `scale(${compareScale})`,
+                        transformOrigin: 'top left',
+                        width: COMPARE_RENDER_BASE_WIDTH,
+                        height: 'auto',
+                      }}
+                    >
+                      <Page
+                        pageNumber={index + 1}
+                        width={COMPARE_RENDER_BASE_WIDTH}
+                        renderTextLayer
+                        renderAnnotationLayer
+                        loading={null}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </Document>
+            </div>
+          )}
+        </div>
+        {compareLeftLoading && <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-200">原文加载中...</div>}
+      </div>
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden flex flex-col min-h-0">
+        <div className="px-3 py-2 text-xs font-medium text-gray-700 border-b border-gray-200">译文 PDF</div>
+        <div
+          ref={rightPdfRef}
+          data-compare-side="right"
+          onScroll={() => {
+            if (!compareScrollSync) return
+            onSyncScroll(rightPdfRef.current, leftPdfRef.current)
+          }}
+          onClickCapture={onPaneClick}
+          onWheel={onPaneWheel}
+          className="flex-1 min-h-0 overflow-auto bg-gray-100"
+        >
+          {compareRightUrl && (
+            <div className="space-y-3 p-2 w-max min-w-full">
+              <Document
+                file={compareRightUrl}
+                options={comparePdfOptions}
+                onLoadSuccess={onRightPdfLoadSuccess}
+                onLoadError={onRightPdfLoadError}
+                loading={null}
+                error={null}
+                noData={null}
+              >
+                {Array.from({ length: compareRightPages }).map((_, index) => (
+                  <div
+                    key={`right-page-${index + 1}`}
+                    data-compare-page-number={index + 1}
+                    className="w-fit mx-auto bg-white border border-gray-200 rounded-sm shadow-sm"
+                  >
+                    <div
+                      style={{
+                        transform: `scale(${compareScale})`,
+                        transformOrigin: 'top left',
+                        width: COMPARE_RENDER_BASE_WIDTH,
+                        height: 'auto',
+                      }}
+                    >
+                      <Page
+                        pageNumber={index + 1}
+                        width={COMPARE_RENDER_BASE_WIDTH}
+                        renderTextLayer
+                        renderAnnotationLayer
+                        loading={null}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </Document>
+            </div>
+          )}
+        </div>
+        {compareRightLoading && <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-200">译文加载中...</div>}
+      </div>
+    </div>
+  ),
+  (prev, next) =>
+    prev.compareLeftUrl === next.compareLeftUrl &&
+    prev.compareRightUrl === next.compareRightUrl &&
+    prev.compareLeftPages === next.compareLeftPages &&
+    prev.compareRightPages === next.compareRightPages &&
+    prev.compareScale === next.compareScale &&
+    prev.compareScrollSync === next.compareScrollSync &&
+    prev.compareLeftLoading === next.compareLeftLoading &&
+    prev.compareRightLoading === next.compareRightLoading
+)
+
+interface CompareQaInputBarProps {
+  streaming: boolean
+  composerKey: number
+  onSubmit: (content: string, images: QaImageFile[]) => Promise<boolean>
+}
+
+const CompareQaInputBar = ({ streaming, composerKey, onSubmit }: CompareQaInputBarProps) => {
+  const [value, setValue] = useState('')
+  const [images, setImages] = useState<QaImageFile[]>([])
+
+  useEffect(() => {
+    setValue('')
+    setImages([])
+  }, [composerKey])
+
+  const handleSend = async () => {
+    const accepted = await onSubmit(value, images)
+    if (accepted) {
+      setValue('')
+      setImages([])
+    }
+  }
+
+  return (
+    <ChatInput
+      value={value}
+      onChange={setValue}
+      onSend={handleSend}
+      disabled={streaming}
+      loading={streaming}
+      images={images}
+      onImagesChange={setImages}
+      pdfFiles={[]}
+      onPdfFilesChange={() => {}}
+    />
+  )
+}
+
 export const CustomToolsPage = () => {
   const {
     apiConfig,
@@ -290,10 +499,9 @@ export const CustomToolsPage = () => {
       y: 80,
     }
   })
-  const [compareQaInput, setCompareQaInput] = useState('')
   const [compareQaMessages, setCompareQaMessages] = useState<Array<{ id: string; role: 'user' | 'assistant'; content: string; images?: string[] }>>([])
-  const [compareQaImages, setCompareQaImages] = useState<Array<{ file: File; preview: string; id: string }>>([])
   const [compareQaStreaming, setCompareQaStreaming] = useState(false)
+  const [compareQaComposerKey, setCompareQaComposerKey] = useState(0)
   const [compareQaConversationId, setCompareQaConversationId] = useState<string | null>(() => {
     return localStorage.getItem('arxivCompareQaConversationId')
   })
@@ -375,7 +583,6 @@ export const CustomToolsPage = () => {
   )
   const comparePdfOptions = useMemo(() => ({ withCredentials: false }), [])
   const compareZoomPercent = Math.round(compareZoom * 100)
-  const COMPARE_RENDER_BASE_WIDTH = 720
   const compareScale = Math.max(0.3, Math.min(2.5, (compareLeftPageWidth / COMPARE_RENDER_BASE_WIDTH) * compareZoom))
 
   const clampCompareZoom = (value: number) => {
@@ -790,9 +997,8 @@ export const CustomToolsPage = () => {
   const resetCompareQaSession = () => {
     qaAbortRef.current?.abort()
     setCompareQaStreaming(false)
-    setCompareQaInput('')
-    setCompareQaImages([])
     setCompareQaMessages([])
+    setCompareQaComposerKey((prev) => prev + 1)
     setCompareQaConversationId(null)
     localStorage.removeItem('arxivCompareQaConversationId')
     setCompareQaHistoryOpen(false)
@@ -833,8 +1039,7 @@ export const CustomToolsPage = () => {
       setCompareQaMessages(messages)
       setCompareQaConversationId(conv.id)
       localStorage.setItem('arxivCompareQaConversationId', conv.id)
-      setCompareQaInput('')
-      setCompareQaImages([])
+      setCompareQaComposerKey((prev) => prev + 1)
       if (closeHistory) {
         setCompareQaHistoryOpen(false)
       }
@@ -942,27 +1147,27 @@ export const CustomToolsPage = () => {
     document.body.style.cursor = mode === 'move' ? 'move' : mode === 'resize-w' ? 'col-resize' : 'row-resize'
   }
 
-  const handleCompareQaSend = async () => {
-    const content = compareQaInput.trim()
-    if (!content && compareQaImages.length === 0) {
+  const handleCompareQaSend = async (rawContent: string, pendingImages: QaImageFile[]): Promise<boolean> => {
+    const content = rawContent.trim()
+    if (!content && pendingImages.length === 0) {
       addToast('请输入问题或粘贴截图', 'warning')
-      return
+      return false
     }
     if (!hasBackendApiKey) {
       addToast('请先在后端 .env 配置 OPENAI_API_KEY', 'warning')
-      return
+      return false
     }
     if (!apiConfig.model) {
       addToast('请先选择模型', 'warning')
-      return
+      return false
     }
     let conversationId = compareQaConversationId
     try {
       setCompareQaStreaming(true)
       const userMessageId = `qa-user-${Date.now()}`
       const userImages: string[] = []
-      if (compareQaImages.length > 0) {
-        for (const img of compareQaImages) {
+      if (pendingImages.length > 0) {
+        for (const img of pendingImages) {
           const base64 = await fileToBase64(img.file)
           userImages.push(base64)
         }
@@ -971,8 +1176,6 @@ export const CustomToolsPage = () => {
         ...prev,
         { id: userMessageId, role: 'user', content: content || '[图片]', images: userImages },
       ])
-      setCompareQaInput('')
-      setCompareQaImages([])
 
       const assistantMessageId = `qa-assistant-${Date.now()}`
       setCompareQaMessages((prev) => [
@@ -1032,6 +1235,7 @@ export const CustomToolsPage = () => {
     } finally {
       setCompareQaStreaming(false)
     }
+    return true
   }
 
   const handleComparePaneClick = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -1069,9 +1273,8 @@ export const CustomToolsPage = () => {
     setCompareCitationHover(null)
     setCompareCitationPinned(null)
     setCompareQaOpen(false)
-    setCompareQaInput('')
     setCompareQaMessages([])
-    setCompareQaImages([])
+    setCompareQaComposerKey((prev) => prev + 1)
     setCompareQaHistoryOpen(false)
   }, [compareOpen, compareLeftUrl, compareRightUrl])
 
@@ -1837,102 +2040,26 @@ latexdiff --version`}
             </div>
           </div>
           <div className="flex-1 min-h-0 flex">
-            <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-0 lg:gap-2 p-2">
-              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden flex flex-col min-h-0">
-                <div className="px-3 py-2 text-xs font-medium text-gray-700 border-b border-gray-200">原文 PDF</div>
-                <div
-                ref={leftPdfRef}
-                data-compare-side="left"
-                onScroll={() => {
-                  if (!compareScrollSync) return
-                  syncPaneScroll(leftPdfRef.current, rightPdfRef.current)
-                }}
-                onClickCapture={handleComparePaneClick}
-                onWheel={handleComparePaneWheel}
-                className="flex-1 min-h-0 overflow-auto bg-gray-100"
-              >
-                  {compareLeftUrl && (
-                    <div className="space-y-3 p-2 w-max min-w-full">
-                      <Document
-                        file={compareLeftUrl}
-                        options={comparePdfOptions}
-                        onLoadSuccess={handleLeftPdfLoadSuccess}
-                        onLoadError={handleLeftPdfLoadError}
-                        loading={null}
-                        error={null}
-                        noData={null}
-                      >
-                        {Array.from({ length: compareLeftPages }).map((_, index) => (
-                          <div
-                            key={`left-page-${index + 1}`}
-                            data-compare-page-number={index + 1}
-                            className="w-fit mx-auto bg-white border border-gray-200 rounded-sm shadow-sm"
-                          >
-                          <div style={{ transform: `scale(${compareScale})`, transformOrigin: 'top left', width: COMPARE_RENDER_BASE_WIDTH, height: 'auto' }}>
-                            <Page
-                              pageNumber={index + 1}
-                              width={COMPARE_RENDER_BASE_WIDTH}
-                              renderTextLayer
-                              renderAnnotationLayer
-                              loading={null}
-                            />
-                          </div>
-                          </div>
-                        ))}
-                      </Document>
-                    </div>
-                  )}
-                </div>
-                {compareLeftLoading && <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-200">原文加载中...</div>}
-              </div>
-              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden flex flex-col min-h-0">
-                <div className="px-3 py-2 text-xs font-medium text-gray-700 border-b border-gray-200">译文 PDF</div>
-                <div
-                ref={rightPdfRef}
-                data-compare-side="right"
-                onScroll={() => {
-                  if (!compareScrollSync) return
-                  syncPaneScroll(rightPdfRef.current, leftPdfRef.current)
-                }}
-                onClickCapture={handleComparePaneClick}
-                onWheel={handleComparePaneWheel}
-                className="flex-1 min-h-0 overflow-auto bg-gray-100"
-              >
-                  {compareRightUrl && (
-                    <div className="space-y-3 p-2 w-max min-w-full">
-                      <Document
-                        file={compareRightUrl}
-                        options={comparePdfOptions}
-                        onLoadSuccess={handleRightPdfLoadSuccess}
-                        onLoadError={handleRightPdfLoadError}
-                        loading={null}
-                        error={null}
-                        noData={null}
-                      >
-                        {Array.from({ length: compareRightPages }).map((_, index) => (
-                          <div
-                            key={`right-page-${index + 1}`}
-                            data-compare-page-number={index + 1}
-                            className="w-fit mx-auto bg-white border border-gray-200 rounded-sm shadow-sm"
-                          >
-                          <div style={{ transform: `scale(${compareScale})`, transformOrigin: 'top left', width: COMPARE_RENDER_BASE_WIDTH, height: 'auto' }}>
-                            <Page
-                              pageNumber={index + 1}
-                              width={COMPARE_RENDER_BASE_WIDTH}
-                              renderTextLayer
-                              renderAnnotationLayer
-                              loading={null}
-                            />
-                          </div>
-                          </div>
-                        ))}
-                      </Document>
-                    </div>
-                  )}
-                </div>
-                {compareRightLoading && <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-200">译文加载中...</div>}
-              </div>
-            </div>
+            <ComparePdfColumns
+              compareLeftUrl={compareLeftUrl}
+              compareRightUrl={compareRightUrl}
+              comparePdfOptions={comparePdfOptions}
+              compareLeftPages={compareLeftPages}
+              compareRightPages={compareRightPages}
+              compareScale={compareScale}
+              compareScrollSync={compareScrollSync}
+              compareLeftLoading={compareLeftLoading}
+              compareRightLoading={compareRightLoading}
+              leftPdfRef={leftPdfRef}
+              rightPdfRef={rightPdfRef}
+              onSyncScroll={syncPaneScroll}
+              onPaneClick={handleComparePaneClick}
+              onPaneWheel={handleComparePaneWheel}
+              onLeftPdfLoadSuccess={handleLeftPdfLoadSuccess}
+              onLeftPdfLoadError={handleLeftPdfLoadError}
+              onRightPdfLoadSuccess={handleRightPdfLoadSuccess}
+              onRightPdfLoadError={handleRightPdfLoadError}
+            />
             {compareQaOpen && (
               <div
                 ref={qaPanelRef}
@@ -2060,16 +2187,10 @@ latexdiff --version`}
                     ))}
                   </div>
                   <div className="px-4 py-3 border-t border-gray-200">
-                    <ChatInput
-                      value={compareQaInput}
-                      onChange={setCompareQaInput}
-                      onSend={handleCompareQaSend}
-                      disabled={compareQaStreaming}
-                      loading={compareQaStreaming}
-                      images={compareQaImages}
-                      onImagesChange={setCompareQaImages}
-                      pdfFiles={[]}
-                      onPdfFilesChange={() => {}}
+                    <CompareQaInputBar
+                      streaming={compareQaStreaming}
+                      composerKey={compareQaComposerKey}
+                      onSubmit={handleCompareQaSend}
                     />
                   </div>
                 </div>
