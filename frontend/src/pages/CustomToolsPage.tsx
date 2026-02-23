@@ -5,7 +5,9 @@ import { Card, CardContent, CardHeader, CardTitle, Input, Button, Loading, addTo
 import { Document, Page, pdfjs } from 'react-pdf'
 import apiClient from '../api/client'
 import { useAppStore } from '../store/app'
-import { ArxivTranslateHistoryItem, ArxivTranslateJob } from '../types/api'
+import { ArxivTranslateHistoryItem, ArxivTranslateJob, Conversation, Message } from '../types/api'
+import MarkdownRenderer from '../components/MarkdownRenderer'
+import ChatInput from '../components/ChatInput'
 import 'react-pdf/dist/Page/AnnotationLayer.css'
 import 'react-pdf/dist/Page/TextLayer.css'
 
@@ -50,6 +52,11 @@ const DEBUG_CITATION_HOVER = false
 const COMPARE_ZOOM_MIN = 0.6
 const COMPARE_ZOOM_MAX = 2.4
 const COMPARE_ZOOM_STEP = 0.1
+const QA_DEFAULT_WIDTH = 420
+const QA_DEFAULT_HEIGHT = 520
+const QA_MIN_WIDTH = 280
+const QA_MIN_HEIGHT = 260
+const QA_DRAG_PADDING = 12
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -226,6 +233,8 @@ export const CustomToolsPage = () => {
     hasBackendApiKey,
     availableModelGroups,
     availableModels,
+    conversations,
+    setConversations,
   } = useAppStore()
   const tools = useMemo<CustomTool[]>(
     () => [
@@ -269,6 +278,48 @@ export const CustomToolsPage = () => {
   const [compareRightUrl, setCompareRightUrl] = useState('')
   const [compareCitationHover, setCompareCitationHover] = useState<CitationHoverState | null>(null)
   const [compareCitationPinned, setCompareCitationPinned] = useState<{ key: string; text: string } | null>(null)
+  const [compareQaOpen, setCompareQaOpen] = useState(false)
+  const [compareQaWidth, setCompareQaWidth] = useState(QA_DEFAULT_WIDTH)
+  const [compareQaHeight, setCompareQaHeight] = useState(QA_DEFAULT_HEIGHT)
+  const [compareQaPosition, setCompareQaPosition] = useState(() => {
+    if (typeof window === 'undefined') {
+      return { x: QA_DRAG_PADDING, y: 80 }
+    }
+    return {
+      x: Math.max(QA_DRAG_PADDING, window.innerWidth - QA_DEFAULT_WIDTH - QA_DRAG_PADDING),
+      y: 80,
+    }
+  })
+  const [compareQaInput, setCompareQaInput] = useState('')
+  const [compareQaMessages, setCompareQaMessages] = useState<Array<{ id: string; role: 'user' | 'assistant'; content: string; images?: string[] }>>([])
+  const [compareQaImages, setCompareQaImages] = useState<Array<{ file: File; preview: string; id: string }>>([])
+  const [compareQaStreaming, setCompareQaStreaming] = useState(false)
+  const [compareQaConversationId, setCompareQaConversationId] = useState<string | null>(() => {
+    return localStorage.getItem('arxivCompareQaConversationId')
+  })
+  const [compareQaHistoryOpen, setCompareQaHistoryOpen] = useState(false)
+  const [compareQaHistoryLoading, setCompareQaHistoryLoading] = useState(false)
+  const [compareQaHistoryItems, setCompareQaHistoryItems] = useState<Conversation[]>([])
+  const qaAbortRef = useRef<AbortController | null>(null)
+  const qaDragRef = useRef<{
+    mode: 'move' | 'resize-w' | 'resize-h' | null
+    startX: number
+    startY: number
+    startLeft: number
+    startTop: number
+    startWidth: number
+    startHeight: number
+    baseLeft: number
+    baseTop: number
+    nextLeft: number
+    nextTop: number
+    nextWidth: number
+    nextHeight: number
+  } | null>(null)
+  const qaDragRafRef = useRef<number | null>(null)
+  const qaPanelRef = useRef<HTMLDivElement | null>(null)
+  const qaHistoryPopoverRef = useRef<HTMLDivElement | null>(null)
+  const qaHistoryButtonRef = useRef<HTMLButtonElement | null>(null)
   const [compareTitle, setCompareTitle] = useState('')
   const [compareError, setCompareError] = useState('')
   const [compareLeftLoading, setCompareLeftLoading] = useState(false)
@@ -276,7 +327,6 @@ export const CustomToolsPage = () => {
   const [compareLeftPages, setCompareLeftPages] = useState(0)
   const [compareRightPages, setCompareRightPages] = useState(0)
   const [compareLeftPageWidth, setCompareLeftPageWidth] = useState(640)
-  const [compareRightPageWidth, setCompareRightPageWidth] = useState(640)
   const [compareZoom, setCompareZoom] = useState(1)
   const [compareScrollSync, setCompareScrollSync] = useState(true)
   const leftPdfRef = useRef<HTMLDivElement | null>(null)
@@ -325,8 +375,8 @@ export const CustomToolsPage = () => {
   )
   const comparePdfOptions = useMemo(() => ({ withCredentials: false }), [])
   const compareZoomPercent = Math.round(compareZoom * 100)
-  const compareLeftRenderWidth = Math.max(220, Math.floor(compareLeftPageWidth * compareZoom))
-  const compareRightRenderWidth = Math.max(220, Math.floor(compareRightPageWidth * compareZoom))
+  const COMPARE_RENDER_BASE_WIDTH = 720
+  const compareScale = Math.max(0.3, Math.min(2.5, (compareLeftPageWidth / COMPARE_RENDER_BASE_WIDTH) * compareZoom))
 
   const clampCompareZoom = (value: number) => {
     const clamped = Math.min(COMPARE_ZOOM_MAX, Math.max(COMPARE_ZOOM_MIN, value))
@@ -575,23 +625,6 @@ export const CustomToolsPage = () => {
     }, 400)
   }
 
-  const calcTooltipPosition = (x: number, y: number) => {
-    const margin = 12
-    const estimatedWidth = 520
-    const estimatedHeight = 210
-    const vw = window.innerWidth || 1280
-    const vh = window.innerHeight || 720
-    let left = x + 12
-    let top = y + 12
-    if (left + estimatedWidth > vw - margin) {
-      left = Math.max(margin, x - estimatedWidth - 12)
-    }
-    if (top + estimatedHeight > vh - margin) {
-      top = Math.max(margin, vh - estimatedHeight - margin)
-    }
-    return { left, top }
-  }
-
   const normalizeText = (value: string) => value.replace(/\s+/g, ' ').trim()
 
   const resolveDestination = async (pdfDoc: any, dest: any): Promise<{ pageNumber: number; y: number | null } | null> => {
@@ -742,31 +775,272 @@ export const CustomToolsPage = () => {
     return resolved
   }
 
-  const handleComparePaneMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
-    const resolved = resolveCitationFromEventTarget(event.target)
-    if (!resolved) {
-      if (!compareCitationPinned) {
-        scheduleHoverHide()
-      }
-      return
-    }
-    clearHoverHideTimer()
-    const pos = calcTooltipPosition(event.clientX, event.clientY)
-    setCompareCitationHover({
-      key: resolved.key,
-      text: resolved.text,
-      x: pos.left,
-      y: pos.top,
-    })
+  const formatLocalDateTime = (date: Date) => {
+    const pad = (value: number) => String(value).padStart(2, '0')
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
   }
 
-  const handleComparePaneMouseLeave = () => {
-    scheduleHoverHide()
+  const formatConversationTime = (value?: string) => {
+    if (!value) return ''
+    const parsed = new Date(value)
+    if (Number.isNaN(parsed.getTime())) return value
+    return formatLocalDateTime(parsed)
+  }
+
+  const resetCompareQaSession = () => {
+    qaAbortRef.current?.abort()
+    setCompareQaStreaming(false)
+    setCompareQaInput('')
+    setCompareQaImages([])
+    setCompareQaMessages([])
+    setCompareQaConversationId(null)
+    localStorage.removeItem('arxivCompareQaConversationId')
+    setCompareQaHistoryOpen(false)
+  }
+
+  const loadCompareQaHistory = async () => {
+    setCompareQaHistoryLoading(true)
+    try {
+      const res = await apiClient.getConversations()
+      const list = res.data?.conversations || []
+      setConversations(list)
+      setCompareQaHistoryItems(list)
+    } catch (error) {
+      if (conversations.length > 0) {
+        setCompareQaHistoryItems(conversations)
+      }
+      addToast('获取历史聊天失败', 'error')
+    } finally {
+      setCompareQaHistoryLoading(false)
+    }
+  }
+
+  const loadCompareQaConversation = async (conversationId: string, closeHistory = false) => {
+    qaAbortRef.current?.abort()
+    setCompareQaStreaming(false)
+    setCompareQaHistoryLoading(true)
+    try {
+      const res = await apiClient.getConversation(conversationId)
+      const conv = res.data
+      const messages = (conv.messages || [])
+        .filter((msg: Message) => msg.role === 'user' || msg.role === 'assistant')
+        .map((msg: Message, index: number) => ({
+          id: msg.id || `qa-msg-${index}`,
+          role: msg.role as 'user' | 'assistant',
+          content: msg.content || '',
+          images: msg.images,
+        }))
+      setCompareQaMessages(messages)
+      setCompareQaConversationId(conv.id)
+      localStorage.setItem('arxivCompareQaConversationId', conv.id)
+      setCompareQaInput('')
+      setCompareQaImages([])
+      if (closeHistory) {
+        setCompareQaHistoryOpen(false)
+      }
+    } catch (error) {
+      addToast('加载历史聊天失败', 'error')
+    } finally {
+      setCompareQaHistoryLoading(false)
+    }
+  }
+
+  const handleSelectCompareQaHistory = async (conversationId: string) => {
+    await loadCompareQaConversation(conversationId, true)
+  }
+
+  const ensureQaConversationId = async () => {
+    if (compareQaConversationId) return compareQaConversationId
+    const title = `对照问答 ${formatLocalDateTime(new Date())}`
+    const res = await apiClient.createConversation(null, title)
+    const newId = res.data.id
+    setCompareQaConversationId(newId)
+    localStorage.setItem('arxivCompareQaConversationId', newId)
+    setConversations((prev) => [res.data, ...prev])
+    return newId
+  }
+
+  const fileToBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result || ''))
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+
+  const COMPARE_QA_CONTEXT_ROUNDS = 20
+
+  const clampValue = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
+
+  const clampQaPosition = (left: number, top: number, width: number, height: number) => {
+    const maxLeft = Math.max(QA_DRAG_PADDING, window.innerWidth - width - QA_DRAG_PADDING)
+    const maxTop = Math.max(QA_DRAG_PADDING, window.innerHeight - height - QA_DRAG_PADDING)
+    return {
+      x: clampValue(left, QA_DRAG_PADDING, maxLeft),
+      y: clampValue(top, QA_DRAG_PADDING, maxTop),
+    }
+  }
+
+  const computeQaDragNext = (
+    drag: NonNullable<typeof qaDragRef.current>,
+    clientX: number,
+    clientY: number
+  ) => {
+    const dx = clientX - drag.startX
+    const dy = clientY - drag.startY
+
+    if (drag.mode === 'move') {
+      const nextLeft = drag.startLeft + dx
+      const nextTop = drag.startTop + dy
+      const clamped = clampQaPosition(nextLeft, nextTop, drag.nextWidth, drag.nextHeight)
+      drag.nextLeft = clamped.x
+      drag.nextTop = clamped.y
+      return
+    }
+
+    if (drag.mode === 'resize-w') {
+      const maxWidth = Math.max(QA_MIN_WIDTH, window.innerWidth - QA_DRAG_PADDING * 2)
+      const rightEdge = drag.startLeft + drag.startWidth
+      const nextWidth = clampValue(drag.startWidth - dx, QA_MIN_WIDTH, maxWidth)
+      const nextLeft = rightEdge - nextWidth
+      const clamped = clampQaPosition(nextLeft, drag.nextTop, nextWidth, drag.nextHeight)
+      drag.nextWidth = nextWidth
+      drag.nextLeft = clamped.x
+      return
+    }
+
+    if (drag.mode === 'resize-h') {
+      const maxHeight = Math.max(QA_MIN_HEIGHT, window.innerHeight - QA_DRAG_PADDING - drag.nextTop)
+      const nextHeight = clampValue(drag.startHeight + dy, QA_MIN_HEIGHT, maxHeight)
+      drag.nextHeight = nextHeight
+    }
+  }
+
+  const beginQaDrag = (mode: 'move' | 'resize-w' | 'resize-h', event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const panelRect = qaPanelRef.current?.getBoundingClientRect()
+    const startLeft = panelRect?.left ?? compareQaPosition.x
+    const startTop = panelRect?.top ?? compareQaPosition.y
+    const startWidth = panelRect?.width ?? compareQaWidth
+    const startHeight = panelRect?.height ?? compareQaHeight
+    qaDragRef.current = {
+      mode,
+      startX: event.clientX,
+      startY: event.clientY,
+      startLeft,
+      startTop,
+      startWidth,
+      startHeight,
+      baseLeft: startLeft,
+      baseTop: startTop,
+      nextLeft: startLeft,
+      nextTop: startTop,
+      nextWidth: startWidth,
+      nextHeight: startHeight,
+    }
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = mode === 'move' ? 'move' : mode === 'resize-w' ? 'col-resize' : 'row-resize'
+  }
+
+  const handleCompareQaSend = async () => {
+    const content = compareQaInput.trim()
+    if (!content && compareQaImages.length === 0) {
+      addToast('请输入问题或粘贴截图', 'warning')
+      return
+    }
+    if (!hasBackendApiKey) {
+      addToast('请先在后端 .env 配置 OPENAI_API_KEY', 'warning')
+      return
+    }
+    if (!apiConfig.model) {
+      addToast('请先选择模型', 'warning')
+      return
+    }
+    let conversationId = compareQaConversationId
+    try {
+      setCompareQaStreaming(true)
+      const userMessageId = `qa-user-${Date.now()}`
+      const userImages: string[] = []
+      if (compareQaImages.length > 0) {
+        for (const img of compareQaImages) {
+          const base64 = await fileToBase64(img.file)
+          userImages.push(base64)
+        }
+      }
+      setCompareQaMessages((prev) => [
+        ...prev,
+        { id: userMessageId, role: 'user', content: content || '[图片]', images: userImages },
+      ])
+      setCompareQaInput('')
+      setCompareQaImages([])
+
+      const assistantMessageId = `qa-assistant-${Date.now()}`
+      setCompareQaMessages((prev) => [
+        ...prev,
+        { id: assistantMessageId, role: 'assistant', content: '' },
+      ])
+
+      if (!conversationId) {
+        conversationId = await ensureQaConversationId()
+      }
+      qaAbortRef.current?.abort()
+      const controller = new AbortController()
+      qaAbortRef.current = controller
+      const response = await apiClient.chat({
+        conversation_id: conversationId,
+        tool_id: null,
+        message: content || ' ',
+        images: userImages,
+        context_rounds: COMPARE_QA_CONTEXT_ROUNDS,
+        api_config: {
+          api_key: '',
+          base_url: '',
+          model: apiConfig.model,
+          temperature: apiConfig.temperature,
+          max_tokens: apiConfig.max_tokens,
+          top_p: apiConfig.top_p,
+          frequency_penalty: apiConfig.frequency_penalty,
+          presence_penalty: apiConfig.presence_penalty,
+        },
+        selected_versions: {},
+      }, controller.signal)
+
+      for await (const { event, data } of apiClient.readStream(response)) {
+        if (event === 'token' && data && typeof data === 'object' && 'content' in data) {
+          const token = String((data as any).content || '')
+          if (token) {
+            setCompareQaMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === assistantMessageId
+                  ? { ...msg, content: msg.content + token }
+                  : msg
+              )
+            )
+          }
+        } else if (event === 'error') {
+          const errorMsg = data && typeof data === 'object' && 'error' in data
+            ? String((data as any).error || '')
+            : '问答失败'
+          addToast(errorMsg, 'error')
+          break
+        } else if (event === 'done') {
+          break
+        }
+      }
+    } catch (error) {
+      addToast('问答失败，请稍后重试', 'error')
+    } finally {
+      setCompareQaStreaming(false)
+    }
   }
 
   const handleComparePaneClick = (event: React.MouseEvent<HTMLDivElement>) => {
     const resolved = resolveCitationFromEventTarget(event.target)
     if (resolved) return
+    const selection = window.getSelection()
+    if (selection && selection.toString().trim()) {
+      return
+    }
     clearHoverHideTimer()
     setCompareCitationHover(null)
   }
@@ -794,9 +1068,119 @@ export const CustomToolsPage = () => {
     pageTextCacheRef.current = { left: new Map(), right: new Map() }
     setCompareCitationHover(null)
     setCompareCitationPinned(null)
+    setCompareQaOpen(false)
+    setCompareQaInput('')
+    setCompareQaMessages([])
+    setCompareQaImages([])
+    setCompareQaHistoryOpen(false)
   }, [compareOpen, compareLeftUrl, compareRightUrl])
 
   useEffect(() => () => clearHoverHideTimer(), [])
+
+  useEffect(() => {
+    if (!compareQaHistoryOpen) return
+    setCompareQaHistoryItems(conversations)
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node | null
+      if (!target) return
+      if (qaHistoryPopoverRef.current?.contains(target)) return
+      if (qaHistoryButtonRef.current?.contains(target)) return
+      setCompareQaHistoryOpen(false)
+    }
+    window.addEventListener('mousedown', handleClickOutside)
+    return () => window.removeEventListener('mousedown', handleClickOutside)
+  }, [compareQaHistoryOpen])
+
+  useEffect(() => {
+    if (compareQaOpen) return
+    setCompareQaHistoryOpen(false)
+  }, [compareQaOpen])
+
+  useEffect(() => {
+    if (!compareQaOpen) return
+    if (!compareQaConversationId) return
+    if (compareQaMessages.length > 0) return
+    loadCompareQaConversation(compareQaConversationId, false)
+  }, [compareQaOpen, compareQaConversationId, compareQaMessages.length])
+
+  useEffect(() => {
+    const handleMouseMove = (event: MouseEvent) => {
+      const drag = qaDragRef.current
+      if (!drag || !drag.mode) return
+      computeQaDragNext(drag, event.clientX, event.clientY)
+
+      if (qaDragRafRef.current) return
+      qaDragRafRef.current = window.requestAnimationFrame(() => {
+        qaDragRafRef.current = null
+        const el = qaPanelRef.current
+        const current = qaDragRef.current
+        if (!el || !current) return
+        const left = current.nextLeft
+        const top = current.nextTop
+        const width = current.nextWidth
+        const height = current.nextHeight
+        el.style.width = `${width}px`
+        el.style.height = `${height}px`
+        el.style.transform = `translate3d(${left - current.baseLeft}px, ${top - current.baseTop}px, 0)`
+      })
+    }
+
+    const handleMouseUp = (event: MouseEvent) => {
+      if (!qaDragRef.current) return
+      const current = qaDragRef.current
+      computeQaDragNext(current, event.clientX, event.clientY)
+      qaDragRef.current = null
+      if (qaDragRafRef.current) {
+        cancelAnimationFrame(qaDragRafRef.current)
+        qaDragRafRef.current = null
+      }
+      const el = qaPanelRef.current
+      if (el) {
+        // Apply final geometry synchronously on mouseup so fast drag-release
+        // does not wait for React render to visually settle.
+        el.style.left = `${current.nextLeft}px`
+        el.style.top = `${current.nextTop}px`
+        el.style.width = `${current.nextWidth}px`
+        el.style.height = `${current.nextHeight}px`
+        el.style.transform = ''
+      }
+      setCompareQaWidth(current.nextWidth)
+      setCompareQaHeight(current.nextHeight)
+      setCompareQaPosition({ x: current.nextLeft, y: current.nextTop })
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!compareQaOpen) return
+    const handleResize = () => {
+      const maxWidth = Math.max(QA_MIN_WIDTH, window.innerWidth - QA_DRAG_PADDING * 2)
+      const maxHeight = Math.max(QA_MIN_HEIGHT, window.innerHeight - QA_DRAG_PADDING * 2)
+      setCompareQaWidth((prev) => Math.min(prev, maxWidth))
+      setCompareQaHeight((prev) => Math.min(prev, maxHeight))
+      setCompareQaPosition((prev) => clampQaPosition(prev.x, prev.y, compareQaWidth, compareQaHeight))
+    }
+    handleResize()
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [compareQaOpen, compareQaWidth, compareQaHeight])
+
+  useEffect(() => {
+    if (!compareQaOpen) return
+    const el = qaPanelRef.current
+    if (!el) return
+    el.style.transform = ''
+    el.style.width = `${compareQaWidth}px`
+    el.style.height = `${compareQaHeight}px`
+  }, [compareQaOpen, compareQaWidth, compareQaHeight])
 
   useEffect(() => {
     if (!compareOpen) return
@@ -808,8 +1192,10 @@ export const CustomToolsPage = () => {
       const rightWidth = rightPdfRef.current
         ? Math.max(320, Math.floor(rightPdfRef.current.clientWidth - 16))
         : 0
-      if (leftWidth > 0) setCompareLeftPageWidth(leftWidth)
-      if (rightWidth > 0) setCompareRightPageWidth(rightWidth)
+      const sharedWidth = Math.min(leftWidth || 0, rightWidth || 0)
+      if (sharedWidth > 0) {
+        setCompareLeftPageWidth((prev) => (prev === sharedWidth ? prev : sharedWidth))
+      }
     }
 
     updatePaneWidths()
@@ -1437,107 +1823,258 @@ latexdiff --version`}
               <button
                 type="button"
                 className="px-3 py-1.5 rounded border border-gray-300 text-sm text-gray-700 hover:bg-gray-50"
+                onClick={() => setCompareQaOpen(true)}
+              >
+                问答
+              </button>
+              <button
+                type="button"
+                className="px-3 py-1.5 rounded border border-gray-300 text-sm text-gray-700 hover:bg-gray-50"
                 onClick={() => setCompareOpen(false)}
               >
                 关闭
               </button>
             </div>
           </div>
-          <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-0 lg:gap-2 p-2">
-            <div className="bg-white rounded-lg border border-gray-200 overflow-hidden flex flex-col min-h-0">
-              <div className="px-3 py-2 text-xs font-medium text-gray-700 border-b border-gray-200">原文 PDF</div>
-              <div
+          <div className="flex-1 min-h-0 flex">
+            <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-0 lg:gap-2 p-2">
+              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden flex flex-col min-h-0">
+                <div className="px-3 py-2 text-xs font-medium text-gray-700 border-b border-gray-200">原文 PDF</div>
+                <div
                 ref={leftPdfRef}
                 data-compare-side="left"
                 onScroll={() => {
                   if (!compareScrollSync) return
                   syncPaneScroll(leftPdfRef.current, rightPdfRef.current)
                 }}
-                onMouseMove={handleComparePaneMouseMove}
-                onMouseLeave={handleComparePaneMouseLeave}
                 onClickCapture={handleComparePaneClick}
                 onWheel={handleComparePaneWheel}
                 className="flex-1 min-h-0 overflow-auto bg-gray-100"
               >
-                {compareLeftUrl && (
-                  <div className="space-y-3 p-2 w-max min-w-full">
-                    <Document
-                      file={compareLeftUrl}
-                      options={comparePdfOptions}
-                      onLoadSuccess={handleLeftPdfLoadSuccess}
-                      onLoadError={handleLeftPdfLoadError}
-                      loading={null}
-                      error={null}
-                      noData={null}
-                    >
-                      {Array.from({ length: compareLeftPages }).map((_, index) => (
-                        <div
-                          key={`left-page-${index + 1}`}
-                          data-compare-page-number={index + 1}
-                          className="w-fit mx-auto bg-white border border-gray-200 rounded-sm shadow-sm"
-                        >
-                          <Page
-                            pageNumber={index + 1}
-                            width={compareLeftRenderWidth}
-                            renderTextLayer
-                            renderAnnotationLayer
-                            loading={null}
-                          />
-                        </div>
-                      ))}
-                    </Document>
-                  </div>
-                )}
+                  {compareLeftUrl && (
+                    <div className="space-y-3 p-2 w-max min-w-full">
+                      <Document
+                        file={compareLeftUrl}
+                        options={comparePdfOptions}
+                        onLoadSuccess={handleLeftPdfLoadSuccess}
+                        onLoadError={handleLeftPdfLoadError}
+                        loading={null}
+                        error={null}
+                        noData={null}
+                      >
+                        {Array.from({ length: compareLeftPages }).map((_, index) => (
+                          <div
+                            key={`left-page-${index + 1}`}
+                            data-compare-page-number={index + 1}
+                            className="w-fit mx-auto bg-white border border-gray-200 rounded-sm shadow-sm"
+                          >
+                          <div style={{ transform: `scale(${compareScale})`, transformOrigin: 'top left', width: COMPARE_RENDER_BASE_WIDTH, height: 'auto' }}>
+                            <Page
+                              pageNumber={index + 1}
+                              width={COMPARE_RENDER_BASE_WIDTH}
+                              renderTextLayer
+                              renderAnnotationLayer
+                              loading={null}
+                            />
+                          </div>
+                          </div>
+                        ))}
+                      </Document>
+                    </div>
+                  )}
+                </div>
+                {compareLeftLoading && <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-200">原文加载中...</div>}
               </div>
-              {compareLeftLoading && <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-200">原文加载中...</div>}
-            </div>
-            <div className="bg-white rounded-lg border border-gray-200 overflow-hidden flex flex-col min-h-0">
-              <div className="px-3 py-2 text-xs font-medium text-gray-700 border-b border-gray-200">译文 PDF</div>
-              <div
+              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden flex flex-col min-h-0">
+                <div className="px-3 py-2 text-xs font-medium text-gray-700 border-b border-gray-200">译文 PDF</div>
+                <div
                 ref={rightPdfRef}
                 data-compare-side="right"
                 onScroll={() => {
                   if (!compareScrollSync) return
                   syncPaneScroll(rightPdfRef.current, leftPdfRef.current)
                 }}
-                onMouseMove={handleComparePaneMouseMove}
-                onMouseLeave={handleComparePaneMouseLeave}
                 onClickCapture={handleComparePaneClick}
                 onWheel={handleComparePaneWheel}
                 className="flex-1 min-h-0 overflow-auto bg-gray-100"
               >
-                {compareRightUrl && (
-                  <div className="space-y-3 p-2 w-max min-w-full">
-                    <Document
-                      file={compareRightUrl}
-                      options={comparePdfOptions}
-                      onLoadSuccess={handleRightPdfLoadSuccess}
-                      onLoadError={handleRightPdfLoadError}
-                      loading={null}
-                      error={null}
-                      noData={null}
-                    >
-                      {Array.from({ length: compareRightPages }).map((_, index) => (
-                        <div
-                          key={`right-page-${index + 1}`}
-                          data-compare-page-number={index + 1}
-                          className="w-fit mx-auto bg-white border border-gray-200 rounded-sm shadow-sm"
-                        >
-                          <Page
-                            pageNumber={index + 1}
-                            width={compareRightRenderWidth}
-                            renderTextLayer
-                            renderAnnotationLayer
-                            loading={null}
-                          />
-                        </div>
-                      ))}
-                    </Document>
-                  </div>
-                )}
+                  {compareRightUrl && (
+                    <div className="space-y-3 p-2 w-max min-w-full">
+                      <Document
+                        file={compareRightUrl}
+                        options={comparePdfOptions}
+                        onLoadSuccess={handleRightPdfLoadSuccess}
+                        onLoadError={handleRightPdfLoadError}
+                        loading={null}
+                        error={null}
+                        noData={null}
+                      >
+                        {Array.from({ length: compareRightPages }).map((_, index) => (
+                          <div
+                            key={`right-page-${index + 1}`}
+                            data-compare-page-number={index + 1}
+                            className="w-fit mx-auto bg-white border border-gray-200 rounded-sm shadow-sm"
+                          >
+                          <div style={{ transform: `scale(${compareScale})`, transformOrigin: 'top left', width: COMPARE_RENDER_BASE_WIDTH, height: 'auto' }}>
+                            <Page
+                              pageNumber={index + 1}
+                              width={COMPARE_RENDER_BASE_WIDTH}
+                              renderTextLayer
+                              renderAnnotationLayer
+                              loading={null}
+                            />
+                          </div>
+                          </div>
+                        ))}
+                      </Document>
+                    </div>
+                  )}
+                </div>
+                {compareRightLoading && <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-200">译文加载中...</div>}
               </div>
-              {compareRightLoading && <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-200">译文加载中...</div>}
             </div>
+            {compareQaOpen && (
+              <div
+                ref={qaPanelRef}
+                className="fixed z-[60]"
+                style={{
+                  width: compareQaWidth,
+                  height: compareQaHeight,
+                  left: compareQaPosition.x,
+                  top: compareQaPosition.y,
+                  willChange: 'transform, width, height',
+                }}
+              >
+                <div className="h-full bg-white border border-gray-200 rounded-xl shadow-xl flex flex-col relative">
+                  <div
+                    className="absolute left-0 top-0 bottom-0 w-2 cursor-col-resize"
+                    onMouseDown={(e) => beginQaDrag('resize-w', e)}
+                  />
+                  <div
+                    className="absolute left-0 right-0 bottom-0 h-2 cursor-row-resize"
+                    onMouseDown={(e) => beginQaDrag('resize-h', e)}
+                  />
+                  <div
+                    className="px-4 py-3 border-b border-gray-200 flex items-center justify-between cursor-move select-none"
+                    onMouseDown={(e) => {
+                      const target = e.target as HTMLElement | null
+                      if (target?.closest('button')) return
+                      beginQaDrag('move', e)
+                    }}
+                  >
+                    <div className="text-sm font-semibold text-gray-900">对照问答</div>
+                    <div className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 text-xs text-gray-700 shadow-sm">
+                      <button
+                        type="button"
+                        className="px-3 py-1.5 rounded-full hover:bg-white"
+                        onClick={resetCompareQaSession}
+                      >
+                        新建
+                      </button>
+                      <span className="h-4 w-px bg-gray-200" />
+                      <div className="relative" onMouseDown={(e) => e.stopPropagation()}>
+                        <button
+                          ref={qaHistoryButtonRef}
+                          type="button"
+                          className="px-3 py-1.5 rounded-full hover:bg-white"
+                          onClick={async () => {
+                            const nextOpen = !compareQaHistoryOpen
+                            setCompareQaHistoryOpen(nextOpen)
+                            if (nextOpen) {
+                              await loadCompareQaHistory()
+                            }
+                          }}
+                        >
+                          历史聊天
+                        </button>
+                        {compareQaHistoryOpen && (
+                          <div
+                            ref={qaHistoryPopoverRef}
+                            className="absolute right-0 mt-2 w-72 bg-white border border-gray-200 rounded-lg shadow-lg z-20"
+                          >
+                            <div className="px-3 py-2 text-xs text-gray-500 border-b border-gray-100">
+                              历史聊天
+                            </div>
+                            <div className="max-h-64 overflow-y-auto">
+                              {compareQaHistoryLoading ? (
+                                <div className="px-3 py-3 text-xs text-gray-400">加载中...</div>
+                              ) : compareQaHistoryItems.length === 0 ? (
+                                <div className="px-3 py-3 text-xs text-gray-400">暂无历史聊天</div>
+                              ) : (
+                                compareQaHistoryItems.map((conv) => (
+                                  <button
+                                    key={conv.id}
+                                    type="button"
+                                    className={`w-full text-left px-3 py-2 text-xs hover:bg-gray-50 ${
+                                      conv.id === compareQaConversationId ? 'bg-gray-50 text-gray-900' : 'text-gray-700'
+                                    }`}
+                                    onClick={() => handleSelectCompareQaHistory(conv.id)}
+                                  >
+                                    <div className="font-medium truncate">{conv.title || '未命名聊天'}</div>
+                                    <div className="text-[11px] text-gray-400 truncate">
+                                      {formatConversationTime(conv.updated_at || conv.created_at)}
+                                    </div>
+                                  </button>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <span className="h-4 w-px bg-gray-200" />
+                      <button
+                        type="button"
+                        className="px-3 py-1.5 rounded-full hover:bg-white"
+                        onClick={() => setCompareQaOpen(false)}
+                      >
+                        关闭
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                    {compareQaMessages.map((msg) => (
+                      <div key={msg.id} className="space-y-2">
+                        <div className={`text-xs ${msg.role === 'user' ? 'text-gray-500' : 'text-gray-400'}`}>
+                          {msg.role === 'user' ? '你' : '助手'}
+                        </div>
+                        <div className={`rounded-lg border ${msg.role === 'user' ? 'bg-white border-gray-200' : 'bg-gray-50 border-gray-100'} p-3`}>
+                          {msg.role === 'assistant' ? (
+                            <MarkdownRenderer content={msg.content} preset="chat" normalizeLatexDelimiters />
+                          ) : (
+                            <div className="whitespace-pre-wrap text-sm text-gray-800">{msg.content}</div>
+                          )}
+                          {msg.images && msg.images.length > 0 && (
+                            <div className="mt-2 grid grid-cols-2 gap-2">
+                              {msg.images.map((img, idx) => (
+                                <img
+                                  key={`${msg.id}-img-${idx}`}
+                                  src={img}
+                                  alt="截图"
+                                  className="w-full rounded border border-gray-200"
+                                />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="px-4 py-3 border-t border-gray-200">
+                    <ChatInput
+                      value={compareQaInput}
+                      onChange={setCompareQaInput}
+                      onSend={handleCompareQaSend}
+                      disabled={compareQaStreaming}
+                      loading={compareQaStreaming}
+                      images={compareQaImages}
+                      onImagesChange={setCompareQaImages}
+                      pdfFiles={[]}
+                      onPdfFilesChange={() => {}}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
           {compareError && (
             <div className="px-4 py-2 bg-white border-t border-gray-200 text-xs text-red-600">{compareError}</div>

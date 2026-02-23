@@ -361,7 +361,19 @@ function ChatInput({
               <input
                 ref={inputRef}
                 value={value}
-                onChange={(e) => onChange(e.target.value)}
+                onChange={(e) => {
+                  const nextValue = e.target.value
+                  onChange(nextValue)
+                  const el = e.currentTarget
+                  const overflowed = el.scrollWidth > el.clientWidth + 4
+                  if (overflowed) {
+                    setUseTextarea(true)
+                    window.setTimeout(() => {
+                      textareaRef.current?.focus()
+                      adjustTextareaHeight(nextValue)
+                    }, 0)
+                  }
+                }}
                 onKeyDown={handleInputKeyDown}
                 onPaste={handlePaste}
                 placeholder="有问题，尽管问"

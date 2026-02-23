@@ -46,7 +46,6 @@ function App() {
     setConversations,
     setCurrentConversation,
     apiConfig,
-    setApiConfig,
     setHasBackendApiKey,
     setAvailableModels,
     setAvailableModelGroups,
@@ -64,7 +63,7 @@ function App() {
         // 加载后端默认配置
         try {
           const defaultConfigRes = await apiClient.getDefaultConfig()
-          const { has_api_key, base_url, models, model_groups } = defaultConfigRes.data
+          const { has_api_key, models, model_groups } = defaultConfigRes.data
           
           // 记录后端是否有 API key
           setHasBackendApiKey(has_api_key)
