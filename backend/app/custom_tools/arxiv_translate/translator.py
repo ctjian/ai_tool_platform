@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 import asyncio
+from difflib import SequenceMatcher
+import re
 
 from httpx import Timeout
 from openai import AsyncOpenAI
@@ -19,6 +21,10 @@ from app.custom_tools.arxiv_translate.splitter import normalize_llm_translated_c
 
 ProgressFn = Optional[Callable[[int, int], Awaitable[None]]]
 UsageFn = Optional[Callable[[Dict[str, int]], Awaitable[None]]]
+
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+_EN_WORD_RE = re.compile(r"[A-Za-z]{2,}")
+_WS_RE = re.compile(r"\s+")
 
 
 @dataclass
@@ -31,16 +37,53 @@ class TranslatorConfig:
     timeout_sec: int = 120
 
 
+def _is_chinese_target(target_language: str) -> bool:
+    target = (target_language or "").strip().lower()
+    return ("中文" in target) or (target in {"zh", "chinese"})
+
+
+def _append_instruction(base: str, extra: str) -> str:
+    head = (base or "").strip()
+    tail = (extra or "").strip()
+    if not head:
+        return tail
+    if not tail:
+        return head
+    return f"{head} {tail}"
+
+
+def _looks_like_untranslated_chunk(original: str, translated: str, *, target_language: str) -> bool:
+    if not _is_chinese_target(target_language):
+        return False
+
+    src = _WS_RE.sub(" ", (original or "").strip())
+    out = _WS_RE.sub(" ", (translated or "").strip())
+    if not src or not out:
+        return False
+
+    # Focus on prose chunks; short/math-heavy chunks are allowed to stay unchanged.
+    if len(_EN_WORD_RE.findall(src)) < 10:
+        return False
+    if len(_CJK_RE.findall(out)) >= 6:
+        return False
+
+    if out == src:
+        return True
+
+    return SequenceMatcher(None, src, out).ratio() >= 0.97
+
+
 def _build_messages(chunk: str, target_language: str, extra_instruction: str) -> List[dict]:
     more_requirement = (extra_instruction or "").strip()
     if more_requirement and not more_requirement.endswith(" "):
         more_requirement += " "
     target = (target_language or "").strip()
-    if ("中文" in target) or (target.lower() in {"zh", "chinese"}):
+    if _is_chinese_target(target):
         user_prompt = (
             "Below is a section from an English academic paper, translate it into Chinese. "
             + more_requirement
             + r"Do not modify any LaTeX commands or environments (e.g., \section, \subsection, \subsubsection, \label, \ref, \eqref, \autoref, \cite, \begin{...}, \end{...}, \item, \caption) or any math content ($...$, \( ... \), \[ ... \], $$...$$). "
+            + r"Translate all natural-language text, including text inside formatting commands such as \textit{...}, \textbf{...}, \emph{...}, and plain text after commands like \label{...}. "
             + r"Keep all numbers, percentages, units, and variable symbols unchanged."
             + r"Keep model names and benchmark names in English (e.g., GPT, Llama, MMLU, HellaSwag)."
             + r"Use formal and concise academic Chinese; avoid colloquial wording."
@@ -73,19 +116,27 @@ async def _translate_one_chunk(
     chunk: str,
     cfg: TranslatorConfig,
     extra_instruction: str,
-    retries: int = 3,
+    retries: int = 2,
 ) -> Tuple[str, Optional[Dict[str, int]]]:
-    last_err: Optional[Exception] = None
     for attempt in range(1, retries + 1):
         try:
+            attempt_instruction = extra_instruction
+            if attempt > 1 and _is_chinese_target(cfg.target_language):
+                attempt_instruction = _append_instruction(
+                    extra_instruction,
+                    r"Do not leave full English sentences unchanged. Translate all prose, including text inside \textit{...}, \textbf{...}, \emph{...}, and text after \label{...}.",
+                )
             resp = await client.chat.completions.create(
                 model=cfg.model,
-                messages=_build_messages(chunk, cfg.target_language, extra_instruction),
+                messages=_build_messages(chunk, cfg.target_language, attempt_instruction),
                 temperature=0.0,
             )
             content = (resp.choices[0].message.content or "").strip()
             if not content:
                 raise RuntimeError("模型返回空文本。")
+            normalized = normalize_llm_translated_chunk(content)
+            if _looks_like_untranslated_chunk(chunk, normalized, target_language=cfg.target_language):
+                raise RuntimeError("模型返回疑似未翻译文本。")
             usage_obj = getattr(resp, "usage", None)
             usage: Optional[Dict[str, int]] = None
             if usage_obj is not None:
@@ -94,13 +145,16 @@ async def _translate_one_chunk(
                     "completion_tokens": int(getattr(usage_obj, "completion_tokens", 0) or 0),
                     "total_tokens": int(getattr(usage_obj, "total_tokens", 0) or 0),
                 }
-            return normalize_llm_translated_chunk(content), usage
-        except Exception as exc:
-            last_err = exc
+            return normalized, usage
+        except asyncio.CancelledError:
+            raise
+        except Exception:
             if attempt >= retries:
                 break
             await asyncio.sleep(min(1.5 * attempt, 4))
-    raise RuntimeError(f"翻译分片失败：{last_err}")
+    # Retry once and then fall back to original chunk so a single gateway error
+    # does not fail the whole translation job.
+    return chunk, None
 
 
 async def translate_chunks(

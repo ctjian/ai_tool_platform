@@ -288,6 +288,8 @@ def _mark_short_begin_end_blocks(text: str, mask: List[bool], *, limit_n_lines: 
         "textbf",
         "itemize",
         "enumerate",
+        "quote",
+        "quotation",
     }
 
     def _walk(sub_text: str, abs_offset: int) -> None:
@@ -494,6 +496,39 @@ def _brace_level(s: str) -> int:
     return level
 
 
+_PAREN_MATH_OPEN_RE = re.compile(r"(?<!\\)\\\(")
+_PAREN_MATH_CLOSE_RE = re.compile(r"(?<!\\)\\\)")
+_BRACKET_MATH_OPEN_RE = re.compile(r"(?<!\\)\\\[")
+_BRACKET_MATH_CLOSE_RE = re.compile(r"(?<!\\)\\\]")
+
+def _count_unescaped_dollar(text: str) -> int:
+    count = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "\\":
+            i += 2
+            continue
+        if text[i] == "$":
+            count += 1
+        i += 1
+    return count
+
+
+def _has_basic_math_delimiter_consistency(original: str, translated: str) -> bool:
+    # Conservative mode:
+    # 1) keep unescaped '$' count unchanged
+    # 2) require balanced \( ... \) in translated text
+    # 3) require balanced \[ ... \] in translated text
+    if _count_unescaped_dollar(original) != _count_unescaped_dollar(translated):
+        return False
+    if len(_PAREN_MATH_OPEN_RE.findall(translated)) != len(_PAREN_MATH_CLOSE_RE.findall(translated)):
+        return False
+    if len(_BRACKET_MATH_OPEN_RE.findall(translated)) != len(_BRACKET_MATH_CLOSE_RE.findall(translated)):
+        return False
+    return True
+
+
 def _join_most(translated: str, original: str) -> str:
     p_t = 0
     p_o = 0
@@ -569,6 +604,9 @@ def guard_translated_segment(original: str, translated: str) -> str:
 
     # Hard guard against extreme blow-up.
     if len(original) >= 200 and len(out) > len(original) * 3:
+        return original
+
+    if not _has_basic_math_delimiter_consistency(original, out):
         return original
 
     return _restore_edge_whitespace(original, out)

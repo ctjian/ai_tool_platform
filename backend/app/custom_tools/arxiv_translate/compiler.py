@@ -58,6 +58,12 @@ _CJK_FALLBACK_BLOCK = rf"""
 _INPUTENC_RE = re.compile(
     r"(?m)^[ \t]*\\usepackage(?:\[[^\]]*\])?\{inputenc\}[ \t]*\n?"
 )
+_FONTENC_RE = re.compile(
+    r"(?m)^[ \t]*\\usepackage(?:\[[^\]]*\])?\{fontenc\}[ \t]*\n?"
+)
+_MICROTYPE_RE = re.compile(
+    r"(?m)^[ \t]*\\usepackage(?:\[[^\]]*\])?\{microtype\}[ \t]*\n?"
+)
 
 _PDFTEX_COMPAT_BEGIN = "%% ARXIV_TRANSLATE_PDFTEX_COMPAT_BEGIN"
 _PDFTEX_COMPAT_END = "%% ARXIV_TRANSLATE_PDFTEX_COMPAT_END"
@@ -139,6 +145,15 @@ def ensure_ctex_support(main_tex_path: Path) -> bool:
     # xelatex/ctex 下 inputenc 会报错并导致返回码非 0，触发无意义重试
     if _INPUTENC_RE.search(text):
         text = _INPUTENC_RE.sub("", text)
+        changed = True
+
+    # XeLaTeX + legacy T1/microtype on Times(Type1) fonts may trigger:
+    # "Cannot use XeTeXglyph with ptmr8c/ptmri8c; not a native platform font."
+    if _FONTENC_RE.search(text):
+        text = _FONTENC_RE.sub("", text)
+        changed = True
+    if _MICROTYPE_RE.search(text):
+        text = _MICROTYPE_RE.sub("", text)
         changed = True
 
     if changed:

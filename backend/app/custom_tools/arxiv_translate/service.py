@@ -405,6 +405,295 @@ def _copy_project_tree(src_root: Path, dst_root: Path) -> None:
     shutil.copytree(src_root, dst_root)
 
 
+def _normalize_include_name(name: str, ext: str) -> str:
+    clean = (name or "").strip()
+    if not clean:
+        return ""
+    # Keep explicit suffixes (e.g. \input{foo.sty}) untouched.
+    if Path(clean).suffix:
+        return clean
+    suffix = f".{str(ext or '').strip().lstrip('.').lower()}"
+    if suffix == ".":
+        return clean
+    if clean.lower().endswith(suffix):
+        return clean
+    return f"{clean}{suffix}"
+
+
+def _resolve_named_file_path(project_root: Path, include_name: str, *, ext: str) -> Optional[Path]:
+    file_name = _normalize_include_name(include_name, ext)
+    if not file_name:
+        return None
+    candidate = project_root / file_name
+    if candidate.exists():
+        return candidate
+    matches = list(project_root.rglob(file_name))
+    if matches:
+        return matches[0]
+    return None
+
+
+def _normalize_tex_include_name(name: str) -> str:
+    return _normalize_include_name(name, "tex")
+
+
+def _resolve_include_tex_path(project_root: Path, include_name: str) -> Optional[Path]:
+    return _resolve_named_file_path(project_root, include_name, ext="tex")
+
+
+def _extract_preamble_text(text: str) -> str:
+    begin_doc = re.search(r"\\begin\{document\}", text)
+    return text[: begin_doc.start()] if begin_doc else text
+
+
+def _find_matching_brace(text: str, open_pos: int) -> int:
+    if open_pos < 0 or open_pos >= len(text) or text[open_pos] != "{":
+        return -1
+    level = 0
+    for idx in range(open_pos, len(text)):
+        ch = text[idx]
+        if ch == "{":
+            level += 1
+        elif ch == "}":
+            level -= 1
+            if level == 0:
+                return idx
+    return -1
+
+
+_PREAMBLE_INCLUDE_RE = re.compile(r"\\(?:input|include)\s*\{([^}]+)\}")
+_PREAMBLE_TOKEN_RE = re.compile(
+    (
+        r"\\(?:input|include)\s*\{([^}]+)\}"
+        r"|\\(?:documentclass|LoadClass)\*?(?:\s*\[[^\]]*\])*\s*\{([^}]+)\}"
+        r"|\\(?:usepackage|RequirePackage)\*?(?:\s*\[[^\]]*\])*\s*\{([^}]+)\}"
+        r"|\\(?:re)?newcommand\*?\s*\{\\([A-Za-z@]+)\}"
+        r"|\\(?:gdef|def)\s*\\([A-Za-z@]+)(?![A-Za-z@])"
+    ),
+    re.DOTALL,
+)
+_PREAMBLE_UNSAFE_MACRO_BODY_RE = re.compile(
+    r"\\(?:def|gdef|let|futurelet|csname|expandafter|catcode)\b",
+    re.DOTALL,
+)
+_PREAMBLE_SAFE_DEF_BODY_RE = re.compile(r"\\(?:begin|end)\s*\{[^{}]+\}\s*$", re.DOTALL)
+_PREAMBLE_RESERVED_MACRO_NAMES = {
+    "appendix",
+    "begin",
+    "caption",
+    "chapter",
+    "end",
+    "footnote",
+    "item",
+    "label",
+    "maketitle",
+    "paragraph",
+    "part",
+    "ref",
+    "section",
+    "subparagraph",
+    "subsection",
+    "subsubsection",
+}
+
+
+def _split_latex_name_list(payload: str) -> List[str]:
+    out: List[str] = []
+    for chunk in (payload or "").split(","):
+        item = chunk.strip()
+        if item:
+            out.append(item)
+    return out
+
+
+def _is_supported_zero_arg_macro(name: str, body: str, *, macro_kind: str) -> bool:
+    macro_name = (name or "").strip()
+    macro_body = (body or "").strip()
+    if not macro_name or not macro_body:
+        return False
+    if macro_name.lower() in _PREAMBLE_RESERVED_MACRO_NAMES:
+        return False
+    # Skip internal commands and parameterized macro bodies.
+    if "@" in macro_name or "@" in macro_body or "#" in macro_body:
+        return False
+    if _PREAMBLE_UNSAFE_MACRO_BODY_RE.search(macro_body):
+        return False
+    if macro_kind == "def":
+        # For low-level \def/\gdef, only allow short begin/end wrappers like \be/\ee.
+        if len(macro_name) < 2 or len(macro_name) > 8:
+            return False
+        if "\n" in macro_body:
+            return False
+        if not _PREAMBLE_SAFE_DEF_BODY_RE.fullmatch(macro_body):
+            return False
+    return True
+
+
+def _collect_preamble_zero_arg_macros(
+    project_root: Path,
+    main_tex_rel: Path,
+) -> tuple[Dict[str, str], Dict[str, int]]:
+    """
+    Collect simple 0-arg macros declared before \\begin{document}, including
+    recursively imported preamble files and local class/style files loaded
+    from the preamble.
+    """
+    macros: Dict[str, str] = {}
+    stats: Dict[str, int] = {
+        "files_scanned": 0,
+        "files_missing_or_unreadable": 0,
+        "collected_newcommand": 0,
+        "collected_def": 0,
+        "skipped_parameterized_or_unsupported": 0,
+        "skipped_unsafe": 0,
+    }
+    visited: set[str] = set()
+
+    def _walk(rel_path: Path, *, file_kind: str) -> None:
+        rel_key = rel_path.as_posix()
+        if rel_key in visited:
+            return
+        visited.add(rel_key)
+        abs_path = project_root / rel_path
+        if not abs_path.exists():
+            stats["files_missing_or_unreadable"] += 1
+            return
+        try:
+            raw = abs_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            stats["files_missing_or_unreadable"] += 1
+            return
+        stats["files_scanned"] += 1
+
+        text = strip_latex_comments(raw)
+        if file_kind == "tex":
+            text = _extract_preamble_text(text)
+        cursor = 0
+        while cursor < len(text):
+            m = _PREAMBLE_TOKEN_RE.search(text, cursor)
+            if not m:
+                break
+
+            include_name = (m.group(1) or "").strip()
+            class_payload = (m.group(2) or "").strip()
+            package_payload = (m.group(3) or "").strip()
+            newcommand_name = (m.group(4) or "").strip()
+            def_name = (m.group(5) or "").strip()
+            if include_name:
+                inc_abs = _resolve_include_tex_path(project_root, include_name)
+                if inc_abs is not None:
+                    try:
+                        _walk(inc_abs.relative_to(project_root), file_kind="tex")
+                    except Exception:
+                        pass
+                cursor = m.end()
+                continue
+
+            if class_payload:
+                for class_name in _split_latex_name_list(class_payload):
+                    cls_abs = _resolve_named_file_path(project_root, class_name, ext="cls")
+                    if cls_abs is None:
+                        continue
+                    try:
+                        _walk(cls_abs.relative_to(project_root), file_kind="cls")
+                    except Exception:
+                        pass
+                cursor = m.end()
+                continue
+
+            if package_payload:
+                for package_name in _split_latex_name_list(package_payload):
+                    sty_abs = _resolve_named_file_path(project_root, package_name, ext="sty")
+                    if sty_abs is None:
+                        continue
+                    try:
+                        _walk(sty_abs.relative_to(project_root), file_kind="sty")
+                    except Exception:
+                        pass
+                cursor = m.end()
+                continue
+
+            if not newcommand_name and not def_name:
+                cursor = m.end()
+                continue
+
+            idx = m.end()
+            while idx < len(text) and text[idx].isspace():
+                idx += 1
+
+            if newcommand_name:
+                # Ignore parameterized forms, e.g. \newcommand{\foo}[2]{...}.
+                if idx < len(text) and text[idx] == "[":
+                    stats["skipped_parameterized_or_unsupported"] += 1
+                    bracket_end = text.find("]", idx + 1)
+                    cursor = (bracket_end + 1) if bracket_end >= 0 else m.end()
+                    continue
+
+            while idx < len(text) and text[idx].isspace():
+                idx += 1
+            if idx >= len(text) or text[idx] != "{":
+                stats["skipped_parameterized_or_unsupported"] += 1
+                cursor = m.end()
+                continue
+
+            body_end = _find_matching_brace(text, idx)
+            if body_end < 0:
+                stats["skipped_parameterized_or_unsupported"] += 1
+                cursor = m.end()
+                continue
+
+            body = text[idx + 1 : body_end].strip()
+            macro_name = newcommand_name or def_name
+            macro_kind = "newcommand" if newcommand_name else "def"
+            if body and _is_supported_zero_arg_macro(macro_name, body, macro_kind=macro_kind):
+                macros[macro_name] = body
+                if newcommand_name:
+                    stats["collected_newcommand"] += 1
+                else:
+                    stats["collected_def"] += 1
+            elif body:
+                stats["skipped_unsafe"] += 1
+            cursor = body_end + 1
+
+    _walk(main_tex_rel, file_kind="tex")
+    return macros, stats
+
+
+def _expand_zero_arg_macros_from_preamble(
+    text: str,
+    macro_map: Dict[str, str],
+    *,
+    only_after_begin_document: bool,
+) -> str:
+    if not text or not macro_map:
+        return text
+
+    ordered_names = sorted(macro_map.keys(), key=len, reverse=True)
+
+    def _replace(chunk: str) -> str:
+        out = chunk
+        for name in ordered_names:
+            pattern = re.compile(rf"\\{re.escape(name)}(?![A-Za-z@])")
+            replacement_body = macro_map[name].strip()
+            # Wrapping \begin/\end in braces breaks environment pairing, e.g. {\begin{equation}}.
+            if _PREAMBLE_SAFE_DEF_BODY_RE.fullmatch(replacement_body):
+                replacement = replacement_body
+            else:
+                replacement = "{" + replacement_body + "}"
+            out = pattern.sub(lambda _m, rep=replacement: rep, out)
+        return out
+
+    if only_after_begin_document:
+        begin_doc = re.search(r"\\begin\{document\}", text)
+        if not begin_doc:
+            return text
+        head = text[: begin_doc.end()]
+        tail = text[begin_doc.end() :]
+        return head + _replace(tail)
+
+    return _replace(text)
+
+
 def _collect_preamble_tex_files(project_root: Path, main_tex_rel: Path) -> set[str]:
     """
     Identify tex files included before \\begin{document} in the main tex.
@@ -419,13 +708,9 @@ def _collect_preamble_tex_files(project_root: Path, main_tex_rel: Path) -> set[s
     except Exception:
         return set()
 
-    text = strip_latex_comments(raw)
-    begin_doc = re.search(r"\\begin\{document\}", text)
-    preamble_text = text[: begin_doc.start()] if begin_doc else text
-
-    pattern = re.compile(r"\\(?:input|include)\s*\{([^}]+)\}")
+    preamble_text = _extract_preamble_text(strip_latex_comments(raw))
     queue: list[str] = []
-    for m in pattern.finditer(preamble_text):
+    for m in _PREAMBLE_INCLUDE_RE.finditer(preamble_text):
         name = (m.group(1) or "").strip()
         if name:
             queue.append(name)
@@ -433,24 +718,14 @@ def _collect_preamble_tex_files(project_root: Path, main_tex_rel: Path) -> set[s
     collected: set[str] = set()
     visited: set[str] = set()
 
-    def _normalize_tex_name(name: str) -> str:
-        if name.lower().endswith(".tex"):
-            return name
-        return f"{name}.tex"
-
     while queue:
         name = queue.pop()
         if name in visited:
             continue
         visited.add(name)
-        tex_name = _normalize_tex_name(name)
-        candidate = project_root / tex_name
-        if not candidate.exists():
-            matches = list(project_root.rglob(tex_name))
-            if matches:
-                candidate = matches[0]
-            else:
-                continue
+        candidate = _resolve_include_tex_path(project_root, name)
+        if candidate is None:
+            continue
         rel = candidate.relative_to(project_root).as_posix()
         if rel in collected:
             continue
@@ -460,7 +735,7 @@ def _collect_preamble_tex_files(project_root: Path, main_tex_rel: Path) -> set[s
             sub_text = strip_latex_comments(candidate.read_text(encoding="utf-8", errors="ignore"))
         except Exception:
             continue
-        for m in pattern.finditer(sub_text):
+        for m in _PREAMBLE_INCLUDE_RE.finditer(sub_text):
             sub_name = (m.group(1) or "").strip()
             if sub_name:
                 queue.append(sub_name)
@@ -808,6 +1083,12 @@ async def _run_job(job_id: str) -> None:
         job["meta"]["main_tex"] = str(main_tex_rel)
         job["meta"]["tex_files"] = len(tex_files)
         preamble_tex_files = _collect_preamble_tex_files(project_root, main_tex_rel)
+        preamble_zero_arg_macros, preamble_macro_stats = _collect_preamble_zero_arg_macros(
+            project_root,
+            main_tex_rel,
+        )
+        job["meta"]["preamble_zero_arg_macro_count"] = len(preamble_zero_arg_macros)
+        job["meta"]["preamble_zero_arg_macro_stats"] = preamble_macro_stats
         paper_title = await asyncio.to_thread(_extract_paper_title_from_main_tex, project_root, main_tex_rel)
         if paper_title:
             job["meta"]["paper_title"] = paper_title
@@ -847,6 +1128,11 @@ async def _run_job(job_id: str) -> None:
                 ]
             else:
                 content = strip_latex_comments(raw_content)
+                content = _expand_zero_arg_macros_from_preamble(
+                    content,
+                    preamble_zero_arg_macros,
+                    only_after_begin_document=(rel == main_tex_rel),
+                )
                 segments = build_translation_segments(content, max_tokens=chunk_max_tokens)
             planned_segments[rel.as_posix()] = segments
             total_chunks += sum(1 for s in segments if s.translatable and s.text.strip())
@@ -894,6 +1180,11 @@ async def _run_job(job_id: str) -> None:
                     ]
                 else:
                     source_text = strip_latex_comments(src_file.read_text(encoding="utf-8", errors="ignore"))
+                    source_text = _expand_zero_arg_macros_from_preamble(
+                        source_text,
+                        preamble_zero_arg_macros,
+                        only_after_begin_document=(rel == main_tex_rel),
+                    )
                     segments = build_translation_segments(source_text, max_tokens=chunk_max_tokens)
 
             state_segments: list[dict] = []
