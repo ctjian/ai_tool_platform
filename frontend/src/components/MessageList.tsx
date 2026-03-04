@@ -1,5 +1,5 @@
 // Review note:
-// - 当消息处于 __waiting__ 阶段时，读取 message.extra.status_steps 渲染论文检索进度列表。
+// - 当消息处于 __waiting__ 阶段时，读取 message.extra.status_steps 渲染流程进度列表（含检索与模型阶段）。
 // - 每个步骤显示运行/完成/失败状态，完成时展示耗时（秒）。
 import React, { forwardRef, useMemo, useState } from 'react'
 import { Message } from '../types/api'
@@ -164,6 +164,7 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
                     return ao - bo
                   })
                 : []
+              const hasStatusSteps = statusSteps.length > 0
               const hasArxivStatus = statusSteps.some((step: any) => {
                 const key = String(step?.key || '')
                 return [
@@ -352,9 +353,9 @@ const MessageListInner = forwardRef<HTMLDivElement, MessageListProps>(
                           <div className="mt-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 shadow-sm">
                             <div className="flex items-center gap-2 text-gray-800 font-medium">
                               <Loader2 size={15} className="animate-spin" />
-                              <span>{hasArxivStatus ? '论文检索处理中' : '正在生成回答'}</span>
+                              <span>{hasArxivStatus ? '论文检索处理中' : '正在处理请求'}</span>
                             </div>
-                            {hasArxivStatus && statusSteps.length > 0 && (
+                            {hasStatusSteps && (
                               <div className="mt-3 space-y-1.5">
                                 {statusSteps.map((step: any, idx: number) => {
                                   const status = String(step?.status || 'running')

@@ -11,6 +11,8 @@ from typing import Any, AsyncGenerator, Optional, Dict, List
 import asyncio
 import json
 import logging
+import time
+import uuid
 from datetime import datetime, timezone
 
 from app.database import get_session, get_chat_session
@@ -136,6 +138,15 @@ def _build_user_message_with_retrieval_context(context_prompt: str, user_message
     ).strip()
 
 
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, int((time.perf_counter() - started_at) * 1000))
+
+
+def _to_status_event(payload: Dict[str, Any]) -> str:
+    data = json.dumps(payload, ensure_ascii=False)
+    return f"event: status\ndata: {data}\n\n"
+
+
 async def generate_chat_stream(
     conversation_id: str,
     tool_id: str,
@@ -152,28 +163,113 @@ async def generate_chat_stream(
     """生成聊天流式响应"""
 
     # 保证 finally 中引用的状态总是已定义，避免早退分支触发 UnboundLocalError。
+    trace_id = uuid.uuid4().hex[:12]
+    request_started_at = time.perf_counter()
+    stage_started_at: Dict[str, float] = {}
+    stage_elapsed_ms: Dict[str, int] = {}
     full_response = ""
     thinking_response = ""
+    token_char_count = 0
+    thinking_char_count = 0
+    first_output_seen = False
+    first_token_seen = False
+    llm_wait_started_at = 0.0
     usage_data: Optional[Dict] = None
     stopped_by_user = False
     cancelled = False
     assistant_saved = False
     assistant_msg = None
+    outcome = "running"
     user_extra_json = (
         json.dumps(request_extra, ensure_ascii=False)
         if isinstance(request_extra, dict) and request_extra
         else None
     )
 
+    def build_status_payload(
+        key: str,
+        status: str,
+        message: str,
+        *,
+        elapsed_ms: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "step_id": f"global:{key}",
+            "key": key,
+            "status": status,
+            "message": message,
+            "trace_id": trace_id,
+        }
+        if elapsed_ms is not None:
+            payload["elapsed_ms"] = int(elapsed_ms)
+        if extra:
+            payload.update(extra)
+        return payload
+
+    def log_stage(payload: Dict[str, Any]) -> None:
+        log_fn = logger.warning if str(payload.get("status")) == "error" else logger.info
+        log_fn(
+            "chat-trace trace_id=%s conversation_id=%s step=%s status=%s elapsed_ms=%s message=%s",
+            trace_id,
+            conversation_id,
+            payload.get("key"),
+            payload.get("status"),
+            payload.get("elapsed_ms"),
+            payload.get("message"),
+        )
+
+    def stage_running(key: str, message: str, **extra: Any) -> Dict[str, Any]:
+        stage_started_at[key] = time.perf_counter()
+        payload = build_status_payload(key, "running", message, extra=extra or None)
+        log_stage(payload)
+        return payload
+
+    def stage_done(
+        key: str,
+        message: str,
+        *,
+        status: str = "done",
+        **extra: Any,
+    ) -> Dict[str, Any]:
+        started_at = stage_started_at.pop(key, None)
+        elapsed_ms = _elapsed_ms(started_at) if started_at else None
+        if elapsed_ms is not None:
+            stage_elapsed_ms[key] = elapsed_ms
+        payload = build_status_payload(
+            key,
+            status,
+            message,
+            elapsed_ms=elapsed_ms,
+            extra=extra or None,
+        )
+        log_stage(payload)
+        return payload
+
     try:
+        logger.info(
+            "chat-trace-start trace_id=%s conversation_id=%s tool_id=%s retry=%s model=%s context_rounds=%s images=%s message_chars=%s",
+            trace_id,
+            conversation_id,
+            tool_id or "",
+            bool(retry_message_id),
+            str(getattr(api_config, "model", "") or ""),
+            context_rounds,
+            len(user_images or []),
+            len(str(user_message or "")),
+        )
+        yield _to_status_event(stage_running("chat_prepare", "准备会话上下文"))
+
         # 1. 获取system prompt
         # 如果指定了tool_id，使用 tools_db 获取工具的system prompt
         # 否则使用默认的system prompt
         if tool_id:
             tool = await tool_crud.get(tools_db, tool_id)
             if not tool:
+                yield _to_status_event(stage_done("chat_prepare", "工具不存在", status="error"))
                 error_data = json.dumps({"error": "工具不存在"})
                 yield f"event: error\ndata: {error_data}\n\n"
+                outcome = "tool_not_found"
                 return
             system_prompt = tool.system_prompt
         else:
@@ -314,8 +410,24 @@ async def generate_chat_stream(
                     if section_ids and target:
                         section_filters[target.canonical_id] = section_ids
 
+        yield _to_status_event(
+            stage_done(
+                "chat_prepare",
+                "会话上下文准备完成",
+                history_messages=len(messages_history),
+                active_papers=len(active_targets),
+            )
+        )
+
         arxiv_context = None
         if active_targets:
+            yield _to_status_event(
+                stage_running(
+                    "chat_retrieval_context",
+                    "正在构建论文检索上下文",
+                    active_papers=len(active_targets),
+                )
+            )
             if section_filters:
                 try:
                     arxiv_context = build_section_context_for_targets(
@@ -324,8 +436,16 @@ async def generate_chat_stream(
                         settings,
                     )
                 except ArxivPipelineError as exc:
+                    yield _to_status_event(
+                        stage_done(
+                            "chat_retrieval_context",
+                            "章节上下文构建失败",
+                            status="error",
+                        )
+                    )
                     error_data = json.dumps({"error": str(exc)})
                     yield f"event: error\ndata: {error_data}\n\n"
+                    outcome = "section_context_error"
                     return
             else:
                 history_user_queries = [
@@ -370,9 +490,26 @@ async def generate_chat_stream(
 
                     arxiv_context = await worker_task
                 except ArxivPipelineError as exc:
+                    yield _to_status_event(
+                        stage_done(
+                            "chat_retrieval_context",
+                            "检索上下文构建失败",
+                            status="error",
+                        )
+                    )
                     error_data = json.dumps({"error": str(exc)})
                     yield f"event: error\ndata: {error_data}\n\n"
+                    outcome = "retrieval_context_error"
                     return
+
+            yield _to_status_event(
+                stage_done(
+                    "chat_retrieval_context",
+                    "检索上下文准备完成",
+                    paper_count=len(arxiv_context.papers) if arxiv_context else len(active_targets),
+                    mode="section_filter" if section_filters else "vector_retrieval",
+                )
+            )
 
         if arxiv_context:
             user_message_for_model = _build_user_message_with_retrieval_context(
@@ -442,6 +579,7 @@ async def generate_chat_stream(
         
         # 5. 如果不是重试，使用 chat_db 保存用户消息到数据库
         if not retry_message_id:
+            yield _to_status_event(stage_running("chat_persist_user_message", "正在保存用户消息"))
             images_json = json.dumps(user_images) if user_images else None
             await message_crud.create(
                 chat_db,
@@ -450,6 +588,13 @@ async def generate_chat_stream(
                 user_message,
                 images_json,
                 extra=user_extra_json,
+            )
+            yield _to_status_event(
+                stage_done(
+                    "chat_persist_user_message",
+                    "用户消息保存完成",
+                    has_images=bool(user_images),
+                )
             )
 
         # 记录本轮实际发送给模型的提示词快照（用于前端“查看提示词”）。
@@ -461,7 +606,6 @@ async def generate_chat_stream(
         )
         
         # 6. 生成消息ID
-        import uuid
         message_id = retry_message_id or str(uuid.uuid4())
         
         # 发送开始事件
@@ -470,12 +614,17 @@ async def generate_chat_stream(
         
         # 7. 调用流式API
         if not api_config or not getattr(api_config, "model", None):
+            yield _to_status_event(stage_done("chat_prepare", "模型未配置", status="error"))
             error_data = json.dumps({"error": "未提供模型，请在前端选择模型"})
             yield f"event: error\ndata: {error_data}\n\n"
+            outcome = "model_missing"
             return
         active_streams[conversation_id] = True
+        llm_wait_started_at = time.perf_counter()
+        yield _to_status_event(stage_running("chat_model_wait_first_chunk", "等待模型首个输出"))
+        stage_running("chat_model_stream", "模型正在生成回答")
 
-        stream_iter = stream_chat_completion(api_config, openai_messages)
+        stream_iter = stream_chat_completion(api_config, openai_messages, trace_id=trace_id)
 
         async def persist_assistant() -> Optional[Dict]:
             nonlocal assistant_saved, assistant_msg
@@ -534,11 +683,31 @@ async def generate_chat_stream(
             # 检查是否被停止
             if not active_streams.get(conversation_id, False):
                 stopped_by_user = True
+                outcome = "stopped_by_user"
+                if "chat_model_wait_first_chunk" in stage_started_at:
+                    yield _to_status_event(
+                        stage_done("chat_model_wait_first_chunk", "用户已停止生成，未等待模型输出")
+                    )
                 break
             
             # 检查是否是错误
             if event.get("type") == "error":
+                if "chat_model_wait_first_chunk" in stage_started_at:
+                    yield _to_status_event(
+                        stage_done(
+                            "chat_model_wait_first_chunk",
+                            "等待模型输出失败",
+                            status="error",
+                        )
+                    )
+                if "chat_model_stream" in stage_started_at:
+                    stage_done(
+                        "chat_model_stream",
+                        "模型生成失败",
+                        status="error",
+                    )
                 yield f"event: error\ndata: {json.dumps({'error': event.get('error')})}\n\n"
+                outcome = "model_stream_error"
                 break
             
             if event.get("type") == "usage":
@@ -547,7 +716,17 @@ async def generate_chat_stream(
             
             if event.get("type") == "thinking":
                 thinking_chunk = event.get("content", "")
+                if thinking_chunk and not first_output_seen:
+                    first_output_seen = True
+                    yield _to_status_event(
+                        stage_done(
+                            "chat_model_wait_first_chunk",
+                            "模型已返回首包",
+                            first_event="thinking",
+                        )
+                    )
                 thinking_response += thinking_chunk
+                thinking_char_count += len(thinking_chunk)
                 thinking_data = json.dumps({"content": thinking_chunk})
                 yield f"event: thinking\ndata: {thinking_data}\n\n"
                 continue
@@ -555,13 +734,57 @@ async def generate_chat_stream(
             if event.get("type") != "token":
                 continue
             chunk = event.get("content", "")
+            if chunk and not first_output_seen:
+                first_output_seen = True
+                yield _to_status_event(
+                    stage_done(
+                        "chat_model_wait_first_chunk",
+                        "模型已返回首包",
+                        first_event="token",
+                    )
+                )
+            if chunk and not first_token_seen:
+                first_token_seen = True
+                first_token_payload = build_status_payload(
+                    "chat_model_first_token",
+                    "done",
+                    "收到首个回答 token",
+                    elapsed_ms=_elapsed_ms(llm_wait_started_at or request_started_at),
+                )
+                log_stage(first_token_payload)
+                yield _to_status_event(first_token_payload)
             full_response += chunk
+            token_char_count += len(chunk)
             chunk_data = json.dumps({"content": chunk})
             yield f"event: token\ndata: {chunk_data}\n\n"
 
+        if "chat_model_wait_first_chunk" in stage_started_at:
+            yield _to_status_event(
+                stage_done(
+                    "chat_model_wait_first_chunk",
+                    "生成结束前未收到模型首包",
+                    status="error" if not stopped_by_user else "done",
+                )
+            )
+        if "chat_model_stream" in stage_started_at:
+            stage_done(
+                "chat_model_stream",
+                "模型流式生成完成" if not stopped_by_user else "模型流式生成已停止",
+                token_chars=token_char_count,
+                thinking_chars=thinking_char_count,
+            )
+
         # 8. 使用 chat_db 保存AI响应到数据库
         if full_response and (active_streams.get(conversation_id, False) or stopped_by_user):
+            yield _to_status_event(stage_running("chat_persist_assistant_message", "正在保存助手消息"))
             cost_meta = await persist_assistant()
+            yield _to_status_event(
+                stage_done(
+                    "chat_persist_assistant_message",
+                    "助手消息保存完成",
+                    response_chars=len(full_response),
+                )
+            )
             message_obj = {
                 "message_id": message_id,
                 "finish_reason": "stopped" if stopped_by_user else "stop"
@@ -586,15 +809,34 @@ async def generate_chat_stream(
                 }
             done_data = json.dumps(message_obj)
             if stopped_by_user:
+                outcome = "stopped"
                 yield f"event: stopped\ndata: {done_data}\n\n"
             else:
+                outcome = "done"
                 yield f"event: done\ndata: {done_data}\n\n"
         elif stopped_by_user:
             stopped_data = json.dumps({
                 "message_id": message_id,
                 "finish_reason": "stopped"
             })
+            outcome = "stopped_without_response"
             yield f"event: stopped\ndata: {stopped_data}\n\n"
+        else:
+            outcome = "empty_response"
+
+        total_payload = build_status_payload(
+            "chat_total",
+            "done",
+            "聊天请求处理完成",
+            elapsed_ms=_elapsed_ms(request_started_at),
+            extra={
+                "token_chars": token_char_count,
+                "thinking_chars": thinking_char_count,
+                "finish_reason": outcome,
+            },
+        )
+        log_stage(total_payload)
+        yield _to_status_event(total_payload)
         
         # 清理
         if conversation_id in active_streams:
@@ -602,12 +844,28 @@ async def generate_chat_stream(
     
     except asyncio.CancelledError:
         cancelled = True
+        outcome = "cancelled"
         # 客户端断开/取消时，避免传播取消导致连接关闭异常
         # 留给 finally 做持久化和清理
         return
     except Exception as e:
+        if "chat_model_wait_first_chunk" in stage_started_at:
+            yield _to_status_event(
+                stage_done(
+                    "chat_model_wait_first_chunk",
+                    "等待模型输出异常",
+                    status="error",
+                )
+            )
+        if "chat_model_stream" in stage_started_at:
+            stage_done(
+                "chat_model_stream",
+                "模型流式生成异常",
+                status="error",
+            )
         error_data = json.dumps({"error": f"服务器错误: {str(e)}"})
         yield f"event: error\ndata: {error_data}\n\n"
+        outcome = "exception"
         
         # 清理
         if conversation_id in active_streams:
@@ -620,6 +878,17 @@ async def generate_chat_stream(
                 pass
         if conversation_id in active_streams:
             del active_streams[conversation_id]
+        log_fn = logger.warning if outcome in {"exception", "model_stream_error"} else logger.info
+        log_fn(
+            "chat-trace-end trace_id=%s conversation_id=%s outcome=%s total_ms=%s token_chars=%s thinking_chars=%s stages=%s",
+            trace_id,
+            conversation_id,
+            outcome,
+            _elapsed_ms(request_started_at),
+            token_char_count,
+            thinking_char_count,
+            json.dumps(stage_elapsed_ms, ensure_ascii=False),
+        )
 
 
 @router.post("/chat/stream")

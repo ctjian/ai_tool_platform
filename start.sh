@@ -65,7 +65,7 @@ if [ ! -d "node_modules" ]; then
 fi
 
 echo -e "${GREEN}✓ 前端启动完成${NC}"
-echo "前端运行在: http://localhost:20102"
+echo "前端运行在: http://localhost:2102"
 echo ""
 
 # 启动前端
@@ -101,7 +101,7 @@ echo "   地址: http://localhost:8000"
 echo "   API文档: http://localhost:8000/docs"
 echo ""
 echo "🎨 前端服务"
-echo "   地址: http://localhost:20102"
+echo "   地址: http://localhost:2102"
 echo ""
 echo "📝 日志文件"
 echo "   后端: logs/backend.log"

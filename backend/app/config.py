@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     CHAT_DATABASE_URL: str = "sqlite+aiosqlite:///./data/chat_history.db"  # 对话历史单独数据库
     
     # CORS配置
-    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:20102,http://localhost:5174"
+    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:2102,http://localhost:5174"
     
     # 文件上传配置
     MAX_UPLOAD_SIZE: int = 2097152  # 2MB

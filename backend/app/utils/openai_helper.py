@@ -3,6 +3,7 @@ from openai import AsyncOpenAI
 from typing import AsyncGenerator, Dict, Any, List, Tuple
 import json
 import logging
+import time
 from httpx import Timeout
 import httpx
 
@@ -15,6 +16,7 @@ logger = logging.getLogger("uvicorn.error")
 async def stream_chat_completion(
     api_config: APIConfig,
     messages: list[dict],
+    trace_id: str = "",
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     流式调用OpenAI Chat Completion API
@@ -29,7 +31,7 @@ async def stream_chat_completion(
     # 初始化客户端时只传递必要参数
     api_key = api_config.api_key or settings.OPENAI_API_KEY
     if not api_key:
-        yield json.dumps({"error": "未配置API Key"})
+        yield {"type": "error", "error": "未配置API Key"}
         return
 
     client_kwargs = {
@@ -41,6 +43,15 @@ async def stream_chat_completion(
     if base_url:
         client_kwargs["base_url"] = base_url
     
+    started_at = time.perf_counter()
+    trace_label = trace_id or "-"
+    logger.info(
+        "chat-model-call-start trace_id=%s model=%s base_url=%s message_count=%s",
+        trace_label,
+        api_config.model,
+        base_url or "",
+        len(messages or []),
+    )
     client = AsyncOpenAI(**client_kwargs)
     
     try:
@@ -70,6 +81,12 @@ async def stream_chat_completion(
                 presence_penalty=api_config.presence_penalty,
                 stream=True,
             )
+        logger.info(
+            "chat-model-call-connected trace_id=%s model=%s elapsed_ms=%s",
+            trace_label,
+            api_config.model,
+            max(0, int((time.perf_counter() - started_at) * 1000)),
+        )
         
         def get_delta_field(delta, name: str):
             if hasattr(delta, name):
@@ -89,11 +106,25 @@ async def stream_chat_completion(
                 return json.dumps(value, ensure_ascii=False)
             return str(value)
 
+        chunk_count = 0
+        token_chars = 0
+        thinking_chars = 0
+        first_chunk_logged = False
         async for chunk in stream:
+            chunk_count += 1
             # 检查chunk是否有choices且不为空
             if chunk.choices and len(chunk.choices) > 0:
                 delta = chunk.choices[0].delta
                 if delta and delta.content:
+                    token_chars += len(delta.content)
+                    if not first_chunk_logged:
+                        first_chunk_logged = True
+                        logger.info(
+                            "chat-model-first-chunk trace_id=%s model=%s elapsed_ms=%s type=token",
+                            trace_label,
+                            api_config.model,
+                            max(0, int((time.perf_counter() - started_at) * 1000)),
+                        )
                     yield {"type": "token", "content": delta.content}
                 reasoning = normalize_reasoning(
                     get_delta_field(delta, "reasoning_content")
@@ -101,6 +132,15 @@ async def stream_chat_completion(
                     or get_delta_field(delta, "thinking")
                 )
                 if reasoning:
+                    thinking_chars += len(reasoning)
+                    if not first_chunk_logged:
+                        first_chunk_logged = True
+                        logger.info(
+                            "chat-model-first-chunk trace_id=%s model=%s elapsed_ms=%s type=thinking",
+                            trace_label,
+                            api_config.model,
+                            max(0, int((time.perf_counter() - started_at) * 1000)),
+                        )
                     yield {"type": "thinking", "content": reasoning}
             usage = getattr(chunk, "usage", None)
             if usage and getattr(usage, "total_tokens", None):
@@ -109,8 +149,24 @@ async def stream_chat_completion(
                 else:
                     usage_data = dict(usage)
                 yield {"type": "usage", "usage": usage_data}
+        logger.info(
+            "chat-model-call-end trace_id=%s model=%s elapsed_ms=%s chunks=%s token_chars=%s thinking_chars=%s",
+            trace_label,
+            api_config.model,
+            max(0, int((time.perf_counter() - started_at) * 1000)),
+            chunk_count,
+            token_chars,
+            thinking_chars,
+        )
     
     except Exception as e:
+        logger.warning(
+            "chat-model-call-error trace_id=%s model=%s elapsed_ms=%s error=%s",
+            trace_label,
+            api_config.model,
+            max(0, int((time.perf_counter() - started_at) * 1000)),
+            str(e),
+        )
         error_msg = f"OpenAI API错误: {str(e)}"
         yield {"type": "error", "error": error_msg}
 

@@ -950,8 +950,15 @@ function ChatWindow() {
                 created_at: new Date().toISOString(),
               }
               setMessages((msgs) => {
+                const waitingMsg = waitingMessageId
+                  ? msgs.find((m) => m.id === waitingMessageId)
+                  : null
+                const waitingExtra =
+                  waitingMsg && typeof (waitingMsg as any).extra === 'object'
+                    ? { ...(waitingMsg as any).extra }
+                    : undefined
                 const filtered = waitingMessageId ? msgs.filter(m => m.id !== waitingMessageId) : msgs
-                return [...filtered, initialMessage]
+                return [...filtered, { ...initialMessage, extra: waitingExtra }]
               })
               assistantCreated = true
               firstTokenReceived = true
