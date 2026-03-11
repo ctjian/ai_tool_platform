@@ -79,7 +79,6 @@ _PDFTEX_COMPAT_BLOCK = rf"""
 \@ifundefined{{pdfpagesattr}}{{\def\pdfpagesattr#1{{}}}}{{}}%
 \@ifundefined{{pdfcatalog}}{{\def\pdfcatalog#1{{}}}}{{}}%
 \@ifundefined{{pdfdest}}{{\def\pdfdest#1{{}}}}{{}}%
-\makeatother
 {_PDFTEX_COMPAT_END}
 """.strip()
 
