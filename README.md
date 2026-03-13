@@ -143,10 +143,10 @@ npm run dev
 pnpm dev
 ```
 
-前端服务将在 http://localhost:20102 启动
+前端服务将在 http://localhost:2102 启动
 
 ### 访问应用
-打开浏览器访问：http://localhost:20102
+打开浏览器访问：http://localhost:2102
 
 ---
 
@@ -191,5 +191,5 @@ alembic upgrade head
 ### 5. CORS错误
 确保后端 `.env` 文件中的 `CORS_ORIGINS` 包含前端地址：
 ```
-CORS_ORIGINS=http://localhost:20102,http://localhost:3000
+CORS_ORIGINS=http://localhost:2102,http://localhost:3000
 ```

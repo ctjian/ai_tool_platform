@@ -18,14 +18,30 @@ NC='\033[0m' # No Color
 echo -e "${YELLOW}启动后端服务 (FastAPI)...${NC}"
 cd backend
 
+PYTHON_BIN=""
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python3)"
+elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python)"
+else
+    echo -e "${RED}未找到 Python，请先安装 Python 3。${NC}"
+    exit 1
+fi
+
 # 检查虚拟环境
 if [ ! -d "venv" ]; then
     echo "创建虚拟环境..."
-    python3 -m venv venv
+    "$PYTHON_BIN" -m venv venv
 fi
 
-# 激活虚拟环境
-source venv/bin/activate || . venv/Scripts/activate # ||是表示如果前一个命令失败则执行后一个命令（兼容Windows）
+if [ -x "venv/bin/python" ]; then
+    VENV_PYTHON="venv/bin/python"
+elif [ -x "venv/Scripts/python.exe" ]; then
+    VENV_PYTHON="venv/Scripts/python.exe"
+else
+    echo -e "${RED}虚拟环境创建失败，未找到可用的 Python 可执行文件。${NC}"
+    exit 1
+fi
 
 # 临时禁用代理
 unset http_proxy
@@ -33,7 +49,11 @@ unset https_proxy
 
 # 安装依赖
 echo "检查依赖..."
-pip install -q -r requirements.txt
+if ! "$VENV_PYTHON" -m pip --version >/dev/null 2>&1; then
+    echo "虚拟环境缺少 pip，正在补装..."
+    "$VENV_PYTHON" -m ensurepip --upgrade
+fi
+"$VENV_PYTHON" -m pip install -q -r requirements.txt
 
 # 初始化数据库
 # echo "初始化数据库..."
@@ -47,7 +67,7 @@ echo ""
 
 # 在后台启动后端
 mkdir -p logs
-nohup uvicorn app.main:app --reload --host :: --port 8000 > logs/backend.log 2>&1 &
+nohup "$VENV_PYTHON" -m uvicorn app.main:app --reload --host :: --port 8000 > logs/backend.log 2>&1 &
 BACKEND_PID=$!
 echo "后端PID: $BACKEND_PID"
 
