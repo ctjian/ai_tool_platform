@@ -27,6 +27,7 @@ from app.custom_tools.arxiv_translate.compiler import (
     ensure_hyperref_driver_sanitized,
     ensure_hyperref_xetex,
     ensure_pdftex_compat,
+    ensure_subcaption_compat,
 )
 from app.custom_tools.arxiv_translate.defaults import (
     DEFAULT_CHUNK_MAX_TOKENS,
@@ -477,6 +478,10 @@ _PREAMBLE_UNSAFE_MACRO_BODY_RE = re.compile(
     re.DOTALL,
 )
 _PREAMBLE_SAFE_DEF_BODY_RE = re.compile(r"\\(?:begin|end)\s*\{[^{}]+\}\s*$", re.DOTALL)
+_PREAMBLE_ENV_WRAPPER_BODY_RE = re.compile(
+    r"(?:\\[A-Za-z@]+(?:\s*\{[^{}]*\})?\s*)*\\(?:begin|end)\s*\{[^{}]+\}\s*$",
+    re.DOTALL,
+)
 _PREAMBLE_RESERVED_MACRO_NAMES = {
     "appendix",
     "begin",
@@ -675,8 +680,9 @@ def _expand_zero_arg_macros_from_preamble(
         for name in ordered_names:
             pattern = re.compile(rf"\\{re.escape(name)}(?![A-Za-z@])")
             replacement_body = macro_map[name].strip()
-            # Wrapping \begin/\end in braces breaks environment pairing, e.g. {\begin{equation}}.
-            if _PREAMBLE_SAFE_DEF_BODY_RE.fullmatch(replacement_body):
+            # Wrapping environment open/close wrappers in braces breaks pairing,
+            # e.g. {\begin{equation}} or {\setlength...\begin{eqnarray*}}.
+            if _PREAMBLE_ENV_WRAPPER_BODY_RE.fullmatch(replacement_body):
                 replacement = replacement_body
             else:
                 replacement = "{" + replacement_body + "}"
@@ -1288,6 +1294,11 @@ async def _run_job(job_id: str) -> None:
         if force_compiler == "xelatex":
             await asyncio.to_thread(ensure_pdftex_compat, paths.translated_dir)
 
+        subcaption_fixed = await asyncio.to_thread(ensure_subcaption_compat, paths.translated_dir / main_tex_rel)
+        if subcaption_fixed:
+            _append_step(job, key="prepare_subcaption", status="done", message="已自动处理 subfigure/subcaption 包冲突。")
+            _persist_job(job)
+
         _append_step(job, key="snapshot", status="running", message="正在保存编译前 tex 版本...")
         _persist_job(job)
         await asyncio.to_thread(
@@ -1307,6 +1318,7 @@ async def _run_job(job_id: str) -> None:
                 await asyncio.to_thread(ensure_hyperref_xetex, paths.translated_dir / main_tex_rel)
                 await asyncio.to_thread(ensure_hyperref_driver_sanitized, paths.translated_dir)
                 await asyncio.to_thread(ensure_pdftex_compat, paths.translated_dir)
+            await asyncio.to_thread(ensure_subcaption_compat, paths.translated_dir / main_tex_rel)
 
             job["meta"]["compile_attempts"] = attempt
             _append_step(
@@ -1337,6 +1349,16 @@ async def _run_job(job_id: str) -> None:
             err_rel = str(first_error.get("file_rel") or main_tex_rel).replace("\\", "/")
             err_line = int(first_error.get("line") or 1)
             if attempt >= max_compile_tries:
+                break
+
+            if bool(first_error.get("external")):
+                _append_step(
+                    job,
+                    key="compile_fix",
+                    status="error",
+                    message=f"第 {attempt} 次编译失败，命中外部 LaTeX 包错误：{first_error.get('file') or err_rel}:{err_line}。",
+                )
+                _persist_job(job)
                 break
 
             window = DEFAULT_COMPILE_REPAIR_BASE_WINDOW * attempt

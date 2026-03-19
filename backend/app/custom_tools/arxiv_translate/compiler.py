@@ -94,6 +94,12 @@ _PDFTEX_PRIMITIVE_HINTS = (
     "\\pdfdest",
 )
 
+_SUBCAPTION_COMPAT_BEGIN = "%% ARXIV_TRANSLATE_SUBCAPTION_COMPAT_BEGIN"
+_SUBCAPTION_COMPAT_END = "%% ARXIV_TRANSLATE_SUBCAPTION_COMPAT_END"
+_USEPACKAGE_SUBCAPTION_RE = re.compile(
+    r"(?m)^(?P<indent>[ \t]*)\\usepackage(?:\[[^\]]*\])?\{subcaption\}[ \t]*$"
+)
+
 
 def _insert_after_documentclass(text: str, block: str) -> str:
     m = re.search(r"\\documentclass(?:\[[^\]]*\])?\{[^}]+\}", text)
@@ -343,6 +349,45 @@ def ensure_pdftex_compat(project_root: Path) -> int:
     return patched
 
 
+def ensure_subcaption_compat(main_tex_path: Path) -> bool:
+    """
+    subcaption cannot coexist with legacy subfigure. Some arXiv sources load both
+    even though the document only uses \subfigure. In that case we disable
+    subcaption conservatively to preserve original behavior.
+    """
+    text = main_tex_path.read_text(encoding="utf-8", errors="replace")
+    if _SUBCAPTION_COMPAT_BEGIN in text and _SUBCAPTION_COMPAT_END in text:
+        return False
+
+    has_subfigure_pkg = bool(re.search(r"\\usepackage(?:\[[^\]]*\])?\{subfigure\}", text))
+    has_subcaption_pkg = bool(re.search(r"\\usepackage(?:\[[^\]]*\])?\{subcaption\}", text))
+    uses_subfigure_cmd = "\\subfigure" in text
+    uses_subcaption_cmd = any(token in text for token in ("\\subcaption", "\\subcaptionbox", "\\begin{subfigure}"))
+
+    if not (has_subfigure_pkg and has_subcaption_pkg and uses_subfigure_cmd and not uses_subcaption_cmd):
+        return False
+
+    changed = False
+
+    def _replace(match: re.Match[str]) -> str:
+        nonlocal changed
+        changed = True
+        indent = match.group("indent") or ""
+        return (
+            f"{indent}{_SUBCAPTION_COMPAT_BEGIN}\n"
+            f"{indent}% disabled automatically: incompatible with subfigure package\n"
+            f"{indent}% {match.group(0).lstrip()}\n"
+            f"{indent}{_SUBCAPTION_COMPAT_END}"
+        )
+
+    updated = _USEPACKAGE_SUBCAPTION_RE.sub(_replace, text, count=1)
+    if not changed or updated == text:
+        return False
+
+    main_tex_path.write_text(updated, encoding="utf-8")
+    return True
+
+
 def _run_command(
     cmd: List[str],
     *,
@@ -409,10 +454,11 @@ def parse_first_latex_error(
         file_rel: Optional[str] = None
 
         candidate = Path(raw_file)
+        project_root_resolved = project_root.resolve()
         if not candidate.is_absolute():
             candidate = (compile_dir / candidate).resolve()
         try:
-            file_rel = str(candidate.relative_to(project_root.resolve()))
+            file_rel = str(candidate.relative_to(project_root_resolved))
         except Exception:
             # fallback: possibly already relative to project root
             raw_posix = raw_file.replace("\\", "/")
@@ -421,11 +467,28 @@ def parse_first_latex_error(
             else:
                 file_rel = str(main_tex_rel)
 
+        # External TeX Live style/class files are not repairable by segment rollback.
+        # Report them, but attribute fallback location to main tex so the caller can
+        # treat them as compatibility/package issues instead of local text corruption.
+        if candidate.is_absolute():
+            try:
+                candidate.relative_to(project_root_resolved)
+            except Exception:
+                return {
+                    "file": raw_file,
+                    "file_rel": str(main_tex_rel).replace("\\", "/"),
+                    "line": line,
+                    "message": msg,
+                    "external_file": raw_file,
+                    "external": True,
+                }
+
         return {
             "file": raw_file,
             "file_rel": file_rel.replace("\\", "/"),
             "line": line,
             "message": msg,
+            "external": False,
         }
 
     fallback = re.search(r"(?m)^l\.(?P<line>\d+)\b", log_text)

@@ -180,6 +180,93 @@ def _mark_command_blocks(text: str, mask: List[bool], commands: List[str]) -> No
         _mark_range(mask, begin, p, False)
 
 
+def _find_matching_bracket(text: str, open_pos: int) -> int:
+    if open_pos < 0 or open_pos >= len(text) or text[open_pos] != "[":
+        return -1
+    level = 0
+    i = open_pos
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "[":
+            level += 1
+        elif ch == "]":
+            level -= 1
+            if level == 0:
+                return i
+        i += 1
+    return -1
+
+
+def _scan_command_invocations(
+    text: str,
+    *,
+    command_prefixes: tuple[str, ...] = (),
+    command_names: tuple[str, ...] = (),
+) -> List[tuple[int, int, str, int]]:
+    out: List[tuple[int, int, str, int]] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] != "\\":
+            i += 1
+            continue
+        j = i + 1
+        while j < n and text[j].isalpha():
+            j += 1
+        cmd = text[i + 1 : j]
+        if not cmd:
+            i += 1
+            continue
+        if command_names and cmd not in command_names:
+            i += 1
+            continue
+        if command_prefixes and not any(cmd.startswith(prefix) for prefix in command_prefixes):
+            i += 1
+            continue
+
+        p = j
+        if p < n and text[p] == "*":
+            p += 1
+
+        opt_count = 0
+        valid = True
+        while True:
+            while p < n and text[p].isspace():
+                p += 1
+            if p < n and text[p] == "[":
+                end_opt = _find_matching_bracket(text, p)
+                if end_opt < 0:
+                    valid = False
+                    break
+                opt_count += 1
+                p = end_opt + 1
+                continue
+            break
+
+        while p < n and text[p].isspace():
+            p += 1
+        if (not valid) or p >= n or text[p] != "{":
+            i += 1
+            continue
+
+        end_brace = _find_matching_brace(text, p)
+        if end_brace < 0:
+            i += 1
+            continue
+
+        out.append((i, end_brace + 1, cmd, opt_count))
+        i = end_brace + 1
+    return out
+
+
+def _mark_prefixed_commands(text: str, mask: List[bool], *, prefixes: tuple[str, ...]) -> None:
+    for start, end, _, _ in _scan_command_invocations(text, command_prefixes=prefixes):
+        _mark_range(mask, start, end, False)
+
+
 def _build_translation_mask(text: str) -> List[bool]:
     mask = [True] * len(text)
 
@@ -210,6 +297,7 @@ def _build_translation_mask(text: str) -> List[bool]:
             "authornote",
         ],
     )
+    _mark_prefixed_commands(text, mask, prefixes=("cite",))
 
     _mark_short_begin_end_blocks(text, mask, limit_n_lines=42)
 
@@ -496,6 +584,13 @@ def _brace_level(s: str) -> int:
     return level
 
 
+def _citation_signatures(text: str) -> List[tuple[str, int]]:
+    return [
+        (cmd, opt_count)
+        for _, _, cmd, opt_count in _scan_command_invocations(text, command_prefixes=("cite",))
+    ]
+
+
 _PAREN_MATH_OPEN_RE = re.compile(r"(?<!\\)\\\(")
 _PAREN_MATH_CLOSE_RE = re.compile(r"(?<!\\)\\\)")
 _BRACKET_MATH_OPEN_RE = re.compile(r"(?<!\\)\\\[")
@@ -590,6 +685,8 @@ def guard_translated_segment(original: str, translated: str) -> str:
     if original.count("\\item") != out.count("\\item"):
         return original
     if original.count("\\caption") != out.count("\\caption"):
+        return original
+    if _citation_signatures(original) != _citation_signatures(out):
         return original
 
     # Escape underscore regression.
