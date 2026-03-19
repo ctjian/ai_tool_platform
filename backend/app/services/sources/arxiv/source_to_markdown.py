@@ -111,9 +111,14 @@ def _expand_includes(
         out_parts.append(source[cursor : m.start()])
         include_target = m.group(1)
         child_rel = _normalize_rel_path(rel_path, include_target)
+        child_key = None
         if child_rel and (child_rel in file_map):
+            child_key = child_rel
+        elif child_rel and (f"{child_rel}.tex" in file_map):
+            child_key = f"{child_rel}.tex"
+        if child_key:
             child_text = _expand_includes(
-                child_rel,
+                child_key,
                 file_map,
                 memo=memo,
                 stack=stack,
@@ -271,14 +276,25 @@ def _extract_abstract(main_text: str, merged_text: str, macros: Optional[Dict[st
 
 
 def _extract_sections(merged_text: str, macros: Optional[Dict[str, str]] = None) -> List[Tuple[int, str, str]]:
+    body_text = merged_text
+    begin_doc = re.search(r"\\begin\{document\}", body_text)
+    if begin_doc:
+        body_text = body_text[begin_doc.end():]
+    end_doc = re.search(r"\\end\{document\}", body_text)
+    if end_doc:
+        body_text = body_text[: end_doc.start()]
+    bib_start = re.search(r"\\bibliography\s*\{", body_text)
+    if bib_start:
+        body_text = body_text[: bib_start.start()]
+
     markers: List[Dict[str, object]] = []
-    for m in _SECTION_RE.finditer(merged_text):
+    for m in _SECTION_RE.finditer(body_text):
         open_pos = m.end() - 1
-        close_pos = _find_matching_brace(merged_text, open_pos)
+        close_pos = _find_matching_brace(body_text, open_pos)
         if close_pos < 0:
             continue
         cmd = str(m.group("cmd") or "section")
-        raw_title = merged_text[open_pos + 1 : close_pos]
+        raw_title = body_text[open_pos + 1 : close_pos]
         title = _clean_meta_text(raw_title, macros)
         if not title:
             continue
@@ -299,24 +315,17 @@ def _extract_sections(merged_text: str, macros: Optional[Dict[str, str]] = None)
     sections: List[Tuple[int, str, str]] = []
     for idx, marker in enumerate(markers):
         body_start = int(marker["body_start"])
-        body_end = len(merged_text)
+        body_end = len(body_text)
         if idx + 1 < len(markers):
             body_end = int(markers[idx + 1]["start"])
-        body = _clean_body_text(merged_text[body_start:body_end], macros)
+        body = _clean_body_text(body_text[body_start:body_end], macros)
         if body:
             sections.append((int(marker["level"]), str(marker["title"]), body))
 
     if sections:
         return sections
 
-    body = merged_text
-    begin_doc = re.search(r"\\begin\{document\}", body)
-    if begin_doc:
-        body = body[begin_doc.end() :]
-    end_doc = re.search(r"\\end\{document\}", body)
-    if end_doc:
-        body = body[: end_doc.start()]
-    fallback = _clean_body_text(body, macros)
+    fallback = _clean_body_text(body_text, macros)
     if fallback:
         return [(2, "Body", fallback)]
     return []
