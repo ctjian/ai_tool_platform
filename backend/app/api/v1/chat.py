@@ -456,6 +456,7 @@ async def generate_chat_stream(
                 rewrite_api_config = {
                     "api_key": str(getattr(api_config, "api_key", "") or ""),
                     "base_url": str(getattr(api_config, "base_url", "") or ""),
+                    "model": str(getattr(api_config, "model", "") or ""),
                 }
                 progress_queue: asyncio.Queue[Dict] = asyncio.Queue()
                 loop = asyncio.get_running_loop()

@@ -6,7 +6,7 @@ export default defineConfig({
   server: {
     host: '::',
     port: 2102,
-    allowedHosts: ['dna.jct.work'],
+    allowedHosts: [],
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8000',

@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # OpenAI默认配置（可选，优先使用UI配置）
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = "https://api.yunwu.ai/v1"
-    TITLE_MODEL: str = Field("gpt-4o-mini", validation_alias="Title_MODEL")
+    TITLE_MODEL: str = Field("", validation_alias="Title_MODEL")
     OPENAI_TIMEOUT_SEC: int = 60
 
     # 计费配置
@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     ARXIV_CHUNK_MAX_TOKENS: int = 1200
     ARXIV_CHUNK_OVERLAP_TOKENS: int = 120
     ARXIV_CHUNK_MIN_TOKENS: int = 120
-    ARXIV_QUERY_REWRITE_MODEL: str = "gpt-4o-mini"
+    ARXIV_QUERY_REWRITE_MODEL: str = ""
     ARXIV_QUERY_REWRITE_HISTORY_TURNS: int = 3
     ARXIV_QUERY_REWRITE_ABSTRACT_CHARS: int = 1200
     ARXIV_QUERY_REWRITE_TIMEOUT_SEC: int = 30

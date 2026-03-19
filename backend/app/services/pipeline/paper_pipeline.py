@@ -170,15 +170,25 @@ def _normalize_rewrite_output(text: str) -> str:
     return normalized.strip("`\"' ")
 
 
+def _resolve_rewrite_model(settings, rewrite_api_config: Optional[Dict[str, str]] = None) -> str:
+    explicit_model = str(getattr(settings, "ARXIV_QUERY_REWRITE_MODEL", "") or "").strip()
+    if explicit_model:
+        return explicit_model
+    session_model = str((rewrite_api_config or {}).get("model") or "").strip()
+    if session_model:
+        return session_model
+    return ""
+
+
 def _rewrite_query_with_llm(
     *,
+    model: str,
     base_query: str,
     history_queries: List[str],
     paper_profiles: List[Dict[str, str]],
     settings,
     rewrite_api_config: Optional[Dict[str, str]] = None,
 ) -> str:
-    model = str(getattr(settings, "ARXIV_QUERY_REWRITE_MODEL", "") or "gpt-4o-mini").strip()
     api_key = str((rewrite_api_config or {}).get("api_key") or settings.OPENAI_API_KEY or "").strip()
     base_url = str(
         (rewrite_api_config or {}).get("base_url")
@@ -881,18 +891,21 @@ def build_arxiv_context_for_targets(
     rewrite_error = ""
     history_for_rewrite = history_cleaned[-history_turns:] if history_turns > 0 else []
     history_for_rewrite = [q for q in history_for_rewrite if q != base_query]
+    rewrite_model = _resolve_rewrite_model(settings, rewrite_api_config)
 
     try:
-        rewritten = _rewrite_query_with_llm(
-            base_query=base_query,
-            history_queries=history_for_rewrite,
-            paper_profiles=rewrite_profiles,
-            settings=settings,
-            rewrite_api_config=rewrite_api_config,
-        )
-        if rewritten:
-            query_text = f"{base_query}\n{rewritten}"
-            rewrite_applied = rewritten != base_query
+        if rewrite_model:
+            rewritten = _rewrite_query_with_llm(
+                model=rewrite_model,
+                base_query=base_query,
+                history_queries=history_for_rewrite,
+                paper_profiles=rewrite_profiles,
+                settings=settings,
+                rewrite_api_config=rewrite_api_config,
+            )
+            if rewritten:
+                query_text = f"{base_query}\n{rewritten}"
+                rewrite_applied = rewritten != base_query
     except Exception as exc:
         rewrite_error = str(exc)
         query_text = base_query
@@ -905,7 +918,11 @@ def build_arxiv_context_for_targets(
     rewrite_msg = (
         "检索查询改写完成"
         if rewrite_applied
-        else ("查询改写失败，回退原查询" if rewrite_error else "检索查询保持原始表达")
+        else (
+            "查询改写失败，回退原查询"
+            if rewrite_error
+            else ("未配置查询改写模型，保持原始检索" if not rewrite_model else "检索查询保持原始表达")
+        )
     )
     _emit_progress(
         progress_callback,
@@ -1015,7 +1032,7 @@ def build_arxiv_context_for_targets(
             "query": query_text,
             "query_base": base_query,
             "query_rewritten": rewrite_applied,
-            "query_rewrite_model": str(getattr(settings, "ARXIV_QUERY_REWRITE_MODEL", "") or "gpt-4o-mini"),
+            "query_rewrite_model": rewrite_model,
             "paper_count": len(papers_public),
             "papers": papers_public,
             "per_paper": paper_debug,

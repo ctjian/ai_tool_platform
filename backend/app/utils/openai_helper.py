@@ -13,6 +13,13 @@ from app.config import settings
 logger = logging.getLogger("uvicorn.error")
 
 
+def _resolve_title_model(api_model: str) -> str:
+    explicit_model = str(settings.TITLE_MODEL or "").strip()
+    if explicit_model:
+        return explicit_model
+    return str(api_model or "").strip()
+
+
 async def stream_chat_completion(
     api_config: APIConfig,
     messages: list[dict],
@@ -350,8 +357,11 @@ async def generate_title_for_conversation(messages: list, api_config=None) -> st
 
 标题:"""
     
-    # 使用标题专用模型（如未设置则回退到当前模型）
-    title_model = settings.TITLE_MODEL or model
+    # 标题生成优先使用显式专用模型，否则跟随当前会话模型。
+    title_model = _resolve_title_model(model)
+
+    if not title_model:
+        return user_message[:10].strip() + ("..." if len(user_message) > 10 else "")
     
     client_kwargs = {
         "api_key": api_key,
@@ -380,6 +390,6 @@ async def generate_title_for_conversation(messages: list, api_config=None) -> st
         return title if title else "新对话"
     
     except Exception as e:
-        logger.warning("生成标题失败: %s", str(e))
+        logger.warning("生成标题失败 model=%s: %s", title_model, str(e))
         # 如果生成失败，使用用户消息的前10个字作为标题
         return user_message[:10].strip() + ("..." if len(user_message) > 10 else "")
