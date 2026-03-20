@@ -17,6 +17,7 @@ class LatexSegment:
 
 
 SHORT_SEGMENT_MIN_CHARS = 42
+_SHORT_PROSE_WORD_RE = re.compile(r"[A-Za-z]{3,}")
 
 
 try:
@@ -180,6 +181,40 @@ def _mark_command_blocks(text: str, mask: List[bool], commands: List[str]) -> No
         _mark_range(mask, begin, p, False)
 
 
+def _mark_heading_commands(text: str, mask: List[bool], commands: List[str]) -> None:
+    """
+    Preserve heading commands with balanced brace payloads, including nested
+    braces such as \subsection{Convergence rate of Algorithm \ref{...}}.
+    """
+    if not commands:
+        return
+    cmd_alt = "|".join(re.escape(cmd) for cmd in commands)
+    pattern = re.compile(rf"\\(?:{cmd_alt})\*?(?:\s*\[[^\]]*\])?\s*\{{", re.DOTALL)
+    for m in pattern.finditer(text):
+        matched = m.group(0)
+        brace_offset = matched.rfind("{")
+        if brace_offset < 0:
+            continue
+        begin = m.start()
+        open_pos = m.start() + brace_offset
+        close_pos = _find_matching_brace(text, open_pos)
+        if close_pos < 0:
+            continue
+        p = close_pos + 1
+        # Preserve an immediate \label{...} if present so the heading and its
+        # label stay together in the non-translatable wrapper chunk.
+        while True:
+            while p < len(text) and text[p].isspace():
+                p += 1
+            if not text.startswith(r"\label{", p):
+                break
+            label_end = _find_matching_brace(text, p + len(r"\label"))
+            if label_end < 0:
+                break
+            p = label_end + 1
+        _mark_range(mask, begin, p, False)
+
+
 def _find_matching_bracket(text: str, open_pos: int) -> int:
     if open_pos < 0 or open_pos >= len(text) or text[open_pos] != "[":
         return -1
@@ -200,12 +235,7 @@ def _find_matching_bracket(text: str, open_pos: int) -> int:
     return -1
 
 
-def _scan_command_invocations(
-    text: str,
-    *,
-    command_prefixes: tuple[str, ...] = (),
-    command_names: tuple[str, ...] = (),
-) -> List[tuple[int, int, str, int]]:
+def _scan_citation_invocations(text: str) -> List[tuple[int, int, str, int]]:
     out: List[tuple[int, int, str, int]] = []
     i = 0
     n = len(text)
@@ -217,13 +247,7 @@ def _scan_command_invocations(
         while j < n and text[j].isalpha():
             j += 1
         cmd = text[i + 1 : j]
-        if not cmd:
-            i += 1
-            continue
-        if command_names and cmd not in command_names:
-            i += 1
-            continue
-        if command_prefixes and not any(cmd.startswith(prefix) for prefix in command_prefixes):
+        if not cmd or not cmd.startswith("cite"):
             i += 1
             continue
 
@@ -246,24 +270,30 @@ def _scan_command_invocations(
                 continue
             break
 
-        while p < n and text[p].isspace():
-            p += 1
-        if (not valid) or p >= n or text[p] != "{":
+        consumed_brace = False
+        while True:
+            while p < n and text[p].isspace():
+                p += 1
+            if p >= n or text[p] != "{":
+                break
+            end_brace = _find_matching_brace(text, p)
+            if end_brace < 0:
+                valid = False
+                break
+            consumed_brace = True
+            p = end_brace + 1
+
+        if (not valid) or (not consumed_brace):
             i += 1
             continue
 
-        end_brace = _find_matching_brace(text, p)
-        if end_brace < 0:
-            i += 1
-            continue
-
-        out.append((i, end_brace + 1, cmd, opt_count))
-        i = end_brace + 1
+        out.append((i, p, cmd, opt_count))
+        i = p
     return out
 
 
-def _mark_prefixed_commands(text: str, mask: List[bool], *, prefixes: tuple[str, ...]) -> None:
-    for start, end, _, _ in _scan_command_invocations(text, command_prefixes=prefixes):
+def _mark_citation_commands(text: str, mask: List[bool]) -> None:
+    for start, end, _, _ in _scan_citation_invocations(text):
         _mark_range(mask, start, end, False)
 
 
@@ -297,17 +327,16 @@ def _build_translation_mask(text: str) -> List[bool]:
             "authornote",
         ],
     )
-    _mark_prefixed_commands(text, mask, prefixes=("cite",))
+    _mark_citation_commands(text, mask)
 
     _mark_short_begin_end_blocks(text, mask, limit_n_lines=42)
 
     preserve_rules = [
         (r"\\iffalse(.*?)\\fi", re.DOTALL, None),
         (r"\$\$([^$]+)\$\$", re.DOTALL, None),
-        (r"\\\[.*?\\\]", re.DOTALL, None),
-        (r"\\section\*?\{.*?\}", 0, None),
-        (r"\\subsection\*?\{.*?\}", 0, None),
-        (r"\\subsubsection\*?\{.*?\}", 0, None),
+        # Avoid matching the line-break form `\\[5pt]` inside align-like
+        # environments. We only want real display-math delimiters `\[ ... \]`.
+        (r"(?<!\\)\\\[.*?(?<!\\)\\\]", re.DOTALL, None),
         (r"\\bibliography\{.*?\}", 0, None),
         (r"\\bibliographystyle\{.*?\}", 0, None),
         (r"\\begin\{thebibliography\}.*?\\end\{thebibliography\}", re.DOTALL, None),
@@ -335,6 +364,8 @@ def _build_translation_mask(text: str) -> List[bool]:
 
     for pattern, flags, max_lines in preserve_rules:
         _mark_pattern(text, mask, pattern, flags=flags, value=False, max_lines=max_lines)
+
+    _mark_heading_commands(text, mask, ["section", "subsection", "subsubsection"])
 
     # Re-enable abstract/caption bodies for translation.
     _unmask_group(
@@ -406,7 +437,12 @@ def _post_process_chunks(chunks: List[tuple[str, bool]]) -> List[tuple[str, bool
         if flag:
             core = text.strip("\n").strip()
             if len(core) < SHORT_SEGMENT_MIN_CHARS:
-                flag = False
+                word_count = len(_SHORT_PROSE_WORD_RE.findall(core))
+                has_sentence_joiner = any(token in core for token in (" ", ",", ".", ";", ":", "-", "(", ")"))
+                # Keep short prose fragments around protected LaTeX commands translatable;
+                # otherwise they get merged into neighboring protected chunks and remain English.
+                if word_count < 2 or not has_sentence_joiner:
+                    flag = False
         adjusted.append((text, flag))
 
     merged: List[tuple[str, bool]] = []
@@ -587,7 +623,7 @@ def _brace_level(s: str) -> int:
 def _citation_signatures(text: str) -> List[tuple[str, int]]:
     return [
         (cmd, opt_count)
-        for _, _, cmd, opt_count in _scan_command_invocations(text, command_prefixes=("cite",))
+        for _, _, cmd, opt_count in _scan_citation_invocations(text)
     ]
 
 

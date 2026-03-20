@@ -25,6 +25,7 @@ UsageFn = Optional[Callable[[Dict[str, int]], Awaitable[None]]]
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 _EN_WORD_RE = re.compile(r"[A-Za-z]{2,}")
 _WS_RE = re.compile(r"\s+")
+_EN_SENTENCE_HEAD_RE = re.compile(r"^(?:[A-Za-z0-9][A-Za-z0-9,;:()'\-]*\s+){8,}[A-Za-z0-9,;:()'\-.]+")
 
 
 @dataclass
@@ -64,11 +65,24 @@ def _looks_like_untranslated_chunk(original: str, translated: str, *, target_lan
     # Focus on prose chunks; short/math-heavy chunks are allowed to stay unchanged.
     if len(_EN_WORD_RE.findall(src)) < 10:
         return False
-    if len(_CJK_RE.findall(out)) >= 6:
-        return False
+
+    out_cjk = len(_CJK_RE.findall(out))
+    out_en_words = len(_EN_WORD_RE.findall(out))
 
     if out == src:
         return True
+
+    # Partial translations are common failure cases for long prose chunks:
+    # the model may keep an English lead sentence and only translate the tail.
+    # Treat a long English prefix or a heavily English-biased output as retryable.
+    if out_en_words >= 10:
+        head_match = _EN_SENTENCE_HEAD_RE.match(out)
+        if head_match and len(_EN_WORD_RE.findall(head_match.group(0))) >= 8:
+            return True
+        if out_cjk < 6:
+            return True
+        if out_en_words >= max(12, out_cjk * 2):
+            return True
 
     return SequenceMatcher(None, src, out).ratio() >= 0.97
 
