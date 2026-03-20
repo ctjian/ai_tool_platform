@@ -627,6 +627,31 @@ def _citation_signatures(text: str) -> List[tuple[str, int]]:
     ]
 
 
+_STRUCTURAL_COMMANDS_TO_PRESERVE = (
+    r"\setlength",
+    r"\addtolength",
+    r"\settowidth",
+    r"\newlength",
+)
+
+_HEADING_COMMANDS_TO_PRESERVE = (
+    r"\part",
+    r"\section",
+    r"\subsection",
+    r"\subsubsection",
+    r"\paragraph",
+    r"\subparagraph",
+)
+
+
+def _count_structural_commands(text: str) -> dict[str, int]:
+    return {cmd: text.count(cmd) for cmd in _STRUCTURAL_COMMANDS_TO_PRESERVE}
+
+
+def _count_heading_commands(text: str) -> dict[str, int]:
+    return {cmd: text.count(cmd) for cmd in _HEADING_COMMANDS_TO_PRESERVE}
+
+
 _PAREN_MATH_OPEN_RE = re.compile(r"(?<!\\)\\\(")
 _PAREN_MATH_CLOSE_RE = re.compile(r"(?<!\\)\\\)")
 _BRACKET_MATH_OPEN_RE = re.compile(r"(?<!\\)\\\[")
@@ -721,6 +746,10 @@ def guard_translated_segment(original: str, translated: str) -> str:
     if original.count("\\item") != out.count("\\item"):
         return original
     if original.count("\\caption") != out.count("\\caption"):
+        return original
+    if _count_structural_commands(original) != _count_structural_commands(out):
+        return original
+    if _count_heading_commands(original) != _count_heading_commands(out):
         return original
     if _citation_signatures(original) != _citation_signatures(out):
         return original
