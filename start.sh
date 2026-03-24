@@ -67,12 +67,20 @@ echo ""
 
 # 在后台启动后端
 mkdir -p logs
-nohup "$VENV_PYTHON" -m uvicorn app.main:app --reload --host :: --port 8000 > logs/backend.log 2>&1 &
+nohup "$VENV_PYTHON" -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 > logs/backend.log 2>&1 &
 BACKEND_PID=$!
 echo "后端PID: $BACKEND_PID"
 
 cd ..
 sleep 2
+
+# 检查后端是否成功启动
+if ! curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then
+    echo -e "${RED}后端启动失败，请检查日志: backend/logs/backend.log${NC}"
+    echo "最近日志:"
+    tail -n 50 backend/logs/backend.log || true
+    exit 1
+fi
 
 # 前端启动
 echo -e "${YELLOW}启动前端服务 (Vite)...${NC}"
