@@ -19,7 +19,9 @@ echo -e "${YELLOW}启动后端服务 (FastAPI)...${NC}"
 cd backend
 
 PYTHON_BIN=""
-if command -v python3 >/dev/null 2>&1; then
+if [ -n "$VIRTUAL_ENV" ] && [ -x "$VIRTUAL_ENV/bin/python" ]; then
+    PYTHON_BIN="$VIRTUAL_ENV/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="$(command -v python3)"
 elif command -v python >/dev/null 2>&1; then
     PYTHON_BIN="$(command -v python)"
@@ -27,6 +29,9 @@ else
     echo -e "${RED}未找到 Python，请先安装 Python 3。${NC}"
     exit 1
 fi
+
+echo "使用 Python: $PYTHON_BIN"
+"$PYTHON_BIN" -V
 
 # 检查虚拟环境
 if [ ! -d "venv" ]; then
@@ -49,11 +54,17 @@ unset https_proxy
 
 # 安装依赖
 echo "检查依赖..."
+echo "虚拟环境 Python: $VENV_PYTHON"
+"$VENV_PYTHON" -V
 if ! "$VENV_PYTHON" -m pip --version >/dev/null 2>&1; then
     echo "虚拟环境缺少 pip，正在补装..."
     "$VENV_PYTHON" -m ensurepip --upgrade
 fi
-"$VENV_PYTHON" -m pip install -q -r requirements.txt
+echo "安装/校验后端依赖..."
+if ! "$VENV_PYTHON" -m pip install -r requirements.txt; then
+    echo -e "${RED}后端依赖安装失败，请检查上面的 pip 输出。${NC}"
+    exit 1
+fi
 
 # 初始化数据库
 # echo "初始化数据库..."
