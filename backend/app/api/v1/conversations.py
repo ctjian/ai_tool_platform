@@ -27,6 +27,7 @@ from app.schemas.conversation import (
     ConversationListResponse,
     ExportConversationResponse,
     MessageResponse,
+    MessageRoundPromptResponse,
 )
 from app.utils.openai_helper import generate_title_for_conversation
 from app.models.message import Message
@@ -46,6 +47,47 @@ from app.services.sources.arxiv.id_parser import safe_id_from_canonical
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error")
+
+
+def _parse_message_extra(raw_extra: Any) -> Optional[Dict[str, Any]]:
+    if raw_extra is None:
+        return None
+    if isinstance(raw_extra, dict):
+        return dict(raw_extra)
+    if isinstance(raw_extra, str):
+        try:
+            parsed = json.loads(raw_extra)
+            return dict(parsed) if isinstance(parsed, dict) else None
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+    return None
+
+
+def _extract_round_prompt(extra: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(extra, dict):
+        return None
+    payload = extra.get("round_prompt")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            payload = None
+    return payload if isinstance(payload, dict) else None
+
+
+def _has_round_prompt(extra: Optional[Dict[str, Any]]) -> bool:
+    payload = _extract_round_prompt(extra)
+    messages = payload.get("messages") if isinstance(payload, dict) else None
+    return isinstance(messages, list) and len(messages) > 0
+
+
+def _strip_round_prompt(extra: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(extra, dict):
+        return extra
+    if "round_prompt" not in extra:
+        return extra
+    sanitized = {k: v for k, v in extra.items() if k != "round_prompt"}
+    return sanitized or None
 
 
 def _sanitize_display_pdf_name(raw_name: str) -> str:
@@ -164,6 +206,8 @@ async def get_conversation(
         key=lambda msg: (msg.created_at, msg.id),
     )
     for msg in ordered_messages:
+        extra = _parse_message_extra(msg.extra)
+        has_round_prompt = _has_round_prompt(extra)
         # 解析图片JSON
         images = None
         if msg.images:
@@ -189,7 +233,8 @@ async def get_conversation(
                 retry_versions=retry_versions,
                 cost_meta=msg.cost_meta,
                 thinking=msg.thinking,
-                extra=msg.extra,
+                extra=_strip_round_prompt(extra),
+                has_round_prompt=has_round_prompt,
                 created_at=msg.created_at
             )
         )
@@ -205,6 +250,30 @@ async def get_conversation(
         updated_at=conversation.updated_at,
         message_count=message_count,
         messages=messages,
+    )
+
+
+@router.get(
+    "/conversations/{conversation_id}/messages/{message_id}/round-prompt",
+    response_model=MessageRoundPromptResponse,
+)
+async def get_message_round_prompt(
+    conversation_id: str,
+    message_id: str,
+    db: AsyncSession = Depends(get_chat_session),
+):
+    """按需获取消息的提示词快照。"""
+    message = await message_crud.get(db, message_id)
+    if not message or message.conversation_id != conversation_id:
+        raise HTTPException(status_code=404, detail="消息不存在")
+
+    extra = _parse_message_extra(message.extra)
+    payload = _extract_round_prompt(extra)
+    has_round_prompt = _has_round_prompt(extra)
+    return MessageRoundPromptResponse(
+        message_id=message_id,
+        has_round_prompt=has_round_prompt,
+        round_prompt=payload if has_round_prompt else None,
     )
 
 

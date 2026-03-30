@@ -19,6 +19,7 @@ logger = logging.getLogger("uvicorn.error")
 BASE_DIR = Path(__file__).resolve().parents[2]
 FRONTEND_DIST_DIR = BASE_DIR / "frontend" / "dist"
 FRONTEND_INDEX_FILE = FRONTEND_DIST_DIR / "index.html"
+UPLOAD_DIR = Path(settings.UPLOAD_DIR).resolve()
 
 
 @asynccontextmanager
@@ -30,7 +31,8 @@ async def lifespan(app: FastAPI):
     # 确保必要的目录存在
     os.makedirs("data", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
-    os.makedirs("uploads/icons", exist_ok=True)
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    (UPLOAD_DIR / "icons").mkdir(parents=True, exist_ok=True)
     os.makedirs(settings.PAPER_DATA_DIR, exist_ok=True)
     os.makedirs(settings.NOTEBOOK_DATA_DIR, exist_ok=True)
     os.makedirs(settings.CUSTOM_TOOLS_DATA_DIR, exist_ok=True)
@@ -66,8 +68,8 @@ app.add_middleware(
 )
 
 # 挂载静态文件目录
-if os.path.exists("uploads"):
-    app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+if UPLOAD_DIR.exists():
+    app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 if os.path.exists(settings.PAPER_DATA_DIR):
     app.mount("/papers", StaticFiles(directory=settings.PAPER_DATA_DIR), name="papers")
 if os.path.exists(settings.CUSTOM_TOOLS_DATA_DIR):

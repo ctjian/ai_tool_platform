@@ -150,6 +150,54 @@ pnpm dev
 
 ---
 
+## 🐳 Docker Compose
+
+项目现在支持直接通过 Docker Compose 启动：
+
+```bash
+docker compose up -d
+```
+
+启动后访问：
+
+- 应用首页：http://localhost:2102
+- API 文档：http://localhost:2102/docs
+
+### 容器化方案说明
+
+- 采用单容器部署：前端在构建阶段打包为静态文件，由 FastAPI 统一提供页面与 `/api/v1` 接口。
+- Compose 直接绑定宿主机目录，和 `backend/.env` 启动方式对齐：
+  - `./backend/data -> /data`
+  - `./backend/uploads -> /uploads`
+- 因此容器会直接复用现有本地数据，包括：
+  - `backend/data/ai_tools.db`
+  - `backend/data/chat_history.db`
+  - `backend/data/chat/papers`
+  - `backend/data/notebook/notes`
+  - `backend/data/custom_tools`
+  - `backend/uploads`
+
+### 环境变量
+
+- `docker-compose.yml` 已内置容器运行所需的路径配置，并将数据库与上传目录映射到宿主机。
+- 如果仓库根目录下存在 [backend/.env](/data/code/ai_tool_platform/backend/.env)，Compose 会自动加载；不存在也可以直接启动。
+- 如需配置模型 API Key、Embedding Key、GROBID 地址等，直接编辑 [backend/.env.example](/data/code/ai_tool_platform/backend/.env.example) 对应字段并保存为 `backend/.env`。
+
+### 已包含与未包含的依赖
+
+- 已包含：
+  - Python 3.11 运行时
+  - FastAPI / Uvicorn
+  - 前端构建产物
+  - SQLite 持久化
+- 未内置：
+  - LaTeX 全家桶（`pdflatex`、`xelatex`、`bibtex`、`latexdiff`）
+  - 外部 GROBID 服务
+
+也就是说，普通聊天、工具管理、Notebook、论文检索接口都可以直接启动；如果你要用 arXiv 精细翻译并编译 PDF，仍然需要额外提供 LaTeX 环境。
+
+---
+
 ## 🔧 常见问题
 
 ### 1. Python版本问题

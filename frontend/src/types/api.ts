@@ -33,9 +33,24 @@ export interface Message {
   cost_meta?: any
   thinking?: string
   extra?: any
+  has_round_prompt?: boolean
   thinking_collapsed?: boolean
   thinking_done?: boolean
   created_at: string
+}
+
+export interface RoundPromptTraceItem {
+  index: number
+  role: string
+  content: string
+}
+
+export interface RoundPromptTrace {
+  model?: string
+  tool_id?: string | null
+  context_rounds?: number | null
+  created_at?: string
+  messages: RoundPromptTraceItem[]
 }
 
 export interface Conversation {

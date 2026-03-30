@@ -5,6 +5,7 @@ Review note:
 - 启动时保留轻量兼容逻辑：旧库缺列时自动补齐。
 """
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.engine import make_url
 from sqlalchemy.pool import StaticPool
 from typing import AsyncGenerator
 import logging
@@ -13,20 +14,29 @@ from app.config import settings
 
 logger = logging.getLogger("uvicorn.error")
 
+def _build_engine_kwargs(database_url: str) -> dict:
+    """为不同数据库类型构建合适的 SQLAlchemy engine 参数。"""
+    kwargs = {"echo": settings.DEBUG}
+    url = make_url(database_url)
+    if url.drivername.startswith("sqlite"):
+        connect_args = {"check_same_thread": False, "timeout": 30}
+        kwargs["connect_args"] = connect_args
+        # 仅内存 SQLite 需要共享单连接；文件库在并发请求下不应强制 StaticPool。
+        if url.database in (None, "", ":memory:"):
+            kwargs["poolclass"] = StaticPool
+    return kwargs
+
+
 # 创建工具数据库异步引擎（分类、工具、配置）
 tools_engine = create_async_engine(
     settings.DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-    echo=settings.DEBUG,
+    **_build_engine_kwargs(settings.DATABASE_URL),
 )
 
 # 创建对话历史数据库异步引擎（会话、消息）
 chat_engine = create_async_engine(
     settings.CHAT_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-    echo=settings.DEBUG,
+    **_build_engine_kwargs(settings.CHAT_DATABASE_URL),
 )
 
 # 创建工具数据库会话工厂

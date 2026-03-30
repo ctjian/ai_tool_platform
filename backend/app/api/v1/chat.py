@@ -123,6 +123,47 @@ def _build_round_prompt_trace(
     }
 
 
+def _parse_message_extra(raw_extra: Any) -> Optional[Dict[str, Any]]:
+    if raw_extra is None:
+        return None
+    if isinstance(raw_extra, dict):
+        return dict(raw_extra)
+    if isinstance(raw_extra, str):
+        try:
+            parsed = json.loads(raw_extra)
+            return dict(parsed) if isinstance(parsed, dict) else None
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+    return None
+
+
+def _extract_round_prompt(extra: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(extra, dict):
+        return None
+    payload = extra.get("round_prompt")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            payload = None
+    return payload if isinstance(payload, dict) else None
+
+
+def _has_round_prompt(extra: Optional[Dict[str, Any]]) -> bool:
+    payload = _extract_round_prompt(extra)
+    messages = payload.get("messages") if isinstance(payload, dict) else None
+    return isinstance(messages, list) and len(messages) > 0
+
+
+def _strip_round_prompt(extra: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(extra, dict):
+        return extra
+    if "round_prompt" not in extra:
+        return extra
+    sanitized = {k: v for k, v in extra.items() if k != "round_prompt"}
+    return sanitized or None
+
+
 def _build_user_message_with_retrieval_context(context_prompt: str, user_message: str) -> str:
     """将检索上下文与用户问题合并为单条 user 消息（不落库）。"""
     context_payload = str(context_prompt or "").strip()
@@ -791,12 +832,7 @@ async def generate_chat_stream(
                 "finish_reason": "stopped" if stopped_by_user else "stop"
             }
             if assistant_msg:
-                extra_obj = None
-                if assistant_msg.extra:
-                    try:
-                        extra_obj = json.loads(assistant_msg.extra)
-                    except Exception:
-                        extra_obj = None
+                extra_obj = _parse_message_extra(assistant_msg.extra)
                 message_obj["message"] = {
                     "id": assistant_msg.id,
                     "conversation_id": assistant_msg.conversation_id,
@@ -805,7 +841,8 @@ async def generate_chat_stream(
                     "retry_versions": assistant_msg.retry_versions,
                     "cost_meta": cost_meta,
                     "thinking": assistant_msg.thinking,
-                    "extra": extra_obj,
+                    "extra": _strip_round_prompt(extra_obj),
+                    "has_round_prompt": _has_round_prompt(extra_obj),
                     "created_at": assistant_msg.created_at.isoformat() if assistant_msg.created_at else None,
                 }
             done_data = json.dumps(message_obj)
@@ -850,6 +887,12 @@ async def generate_chat_stream(
         # 留给 finally 做持久化和清理
         return
     except Exception as e:
+        logger.exception(
+            "chat-stream-exception trace_id=%s conversation_id=%s error=%s",
+            trace_id,
+            conversation_id,
+            str(e),
+        )
         if "chat_model_wait_first_chunk" in stage_started_at:
             yield _to_status_event(
                 stage_done(

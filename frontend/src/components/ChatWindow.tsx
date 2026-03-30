@@ -8,7 +8,7 @@ import MessageList from './MessageList'
 import ChatInput from './ChatInput'
 import { Plus, Download, ChevronDown, Check, FileText, X, Copy, AlertCircle, Library, Trash2 } from 'lucide-react'
 import { addToast } from './ui'
-import { ConversationPapersState, Message, PaperSection } from '../types/api'
+import { ConversationPapersState, Message, PaperSection, RoundPromptTrace } from '../types/api'
 
 interface ImageFile {
   file: File
@@ -81,27 +81,8 @@ const formatRoundPromptText = (trace: any): string => {
   return `${header}\n\n${body}`.trim()
 }
 
-const hasRoundPromptPayload = (message: any): boolean => {
-  if (!message) return false
-  let extra = message?.extra
-  if (typeof extra === 'string') {
-    try {
-      extra = JSON.parse(extra)
-    } catch {
-      extra = null
-    }
-  }
-  let roundPrompt = extra?.round_prompt
-  if (typeof roundPrompt === 'string') {
-    try {
-      roundPrompt = JSON.parse(roundPrompt)
-    } catch {
-      roundPrompt = null
-    }
-  }
-  const list = roundPrompt?.messages
-  return Array.isArray(list) && list.length > 0
-}
+const hasRoundPrompt = (message: Message | null | undefined): boolean =>
+  Boolean(message?.has_round_prompt)
 
 function ChatWindow() {
   const {
@@ -133,8 +114,10 @@ function ChatWindow() {
   const [promptPanelOpen, setPromptPanelOpen] = useState(false)
   const [paperPanelOpen, setPaperPanelOpen] = useState(false)
   const [roundPromptPanelOpen, setRoundPromptPanelOpen] = useState(false)
-  const [selectedRoundPrompt, setSelectedRoundPrompt] = useState<any | null>(null)
+  const [selectedRoundPrompt, setSelectedRoundPrompt] = useState<RoundPromptTrace | null>(null)
   const [selectedRoundPromptMessageId, setSelectedRoundPromptMessageId] = useState<string | null>(null)
+  const [selectedRoundPromptLoading, setSelectedRoundPromptLoading] = useState(false)
+  const [roundPromptCache, setRoundPromptCache] = useState<Record<string, RoundPromptTrace>>({})
   const [focusedPaperId, setFocusedPaperId] = useState<string | null>(null)
   const [systemPromptDraft, setSystemPromptDraft] = useState('')
   const [promptSaving, setPromptSaving] = useState(false)
@@ -330,6 +313,14 @@ function ChatWindow() {
   }, [currentConversation?.id])
 
   useEffect(() => {
+    setRoundPromptPanelOpen(false)
+    setSelectedRoundPrompt(null)
+    setSelectedRoundPromptMessageId(null)
+    setSelectedRoundPromptLoading(false)
+    setRoundPromptCache({})
+  }, [currentConversation?.id])
+
+  useEffect(() => {
     const container = messagesContainerRef.current
     if (!container) return
     const handleScroll = () => {
@@ -390,21 +381,22 @@ function ChatWindow() {
     })
   }, [messages, isStreaming])
 
-  useEffect(() => {
-    if (promptPanelOpen) return
+  const systemPromptSeed = useMemo(() => {
     if (currentTool) {
-      setSystemPromptDraft(currentTool.system_prompt || '')
-      return
+      return currentTool.system_prompt || ''
     }
     const fromMessages = getSystemPromptFromMessages(messages)
-    setSystemPromptDraft(fromMessages || DEFAULT_SYSTEM_PROMPT)
+    return fromMessages || DEFAULT_SYSTEM_PROMPT
   }, [
-    promptPanelOpen,
-    currentTool?.id,
-    currentTool?.system_prompt,
+    currentTool,
     currentConversation?.id,
-    messages,
+    messages.length,
   ])
+
+  useEffect(() => {
+    if (promptPanelOpen) return
+    setSystemPromptDraft(systemPromptSeed)
+  }, [promptPanelOpen, systemPromptSeed])
 
 
   useEffect(() => {
@@ -437,6 +429,7 @@ function ChatWindow() {
 
       try {
         const res = await apiClient.getConversation(currentConversation.id)
+        autoScrollPausedRef.current = false
         setMessages(res.data.messages || [])
       } catch (error) {
         console.error('Failed to load messages:', error)
@@ -526,26 +519,43 @@ function ChatWindow() {
     }
   }
 
-  const handleOpenRoundPrompt = useCallback((msg: Message) => {
-    let payload = (msg as any)?.extra?.round_prompt
-    if (typeof payload === 'string') {
-      try {
-        payload = JSON.parse(payload)
-      } catch {
-        payload = null
-      }
-    }
-    const hasMessages = Array.isArray(payload?.messages) && payload.messages.length > 0
-    if (!hasMessages) {
+  const handleOpenRoundPrompt = useCallback(async (msg: Message) => {
+    if (!currentConversation?.id) return
+    if (!hasRoundPrompt(msg)) {
       addToast('该轮未记录提示词快照', 'warning')
       return
     }
     setPromptPanelOpen(false)
     setPaperPanelOpen(false)
-    setSelectedRoundPrompt(payload)
     setSelectedRoundPromptMessageId(msg.id)
     setRoundPromptPanelOpen(true)
-  }, [])
+    const cached = roundPromptCache[msg.id]
+    if (cached) {
+      setSelectedRoundPrompt(cached)
+      setSelectedRoundPromptLoading(false)
+      return
+    }
+    setSelectedRoundPrompt(null)
+    setSelectedRoundPromptLoading(true)
+    try {
+      const res = await apiClient.getMessageRoundPrompt(currentConversation.id, msg.id)
+      const payload = res.data?.round_prompt
+      const hasMessages = Array.isArray(payload?.messages) && payload.messages.length > 0
+      if (!hasMessages || !payload) {
+        setSelectedRoundPrompt(null)
+        addToast('该轮未记录提示词快照', 'warning')
+        return
+      }
+      setRoundPromptCache((prev) => ({ ...prev, [msg.id]: payload }))
+      setSelectedRoundPrompt(payload)
+    } catch (error) {
+      console.error('Failed to load round prompt:', error)
+      setSelectedRoundPrompt(null)
+      addToast('加载本轮提示词失败', 'error')
+    } finally {
+      setSelectedRoundPromptLoading(false)
+    }
+  }, [currentConversation?.id, roundPromptCache])
 
   const handleCopyRoundPrompt = async () => {
     if (!selectedRoundPrompt) return
@@ -672,10 +682,6 @@ function ChatWindow() {
         retry_message_id: retryMessageId,
         selected_versions: versionIndices,
       }, controller.signal)
-      if (conversationId) {
-        void refreshConversationPapers(conversationId)
-      }
-
       // 处理流式SSE响应 - 使用缓冲区减少重新渲染
       let assistantMessageId = retryMessageId || ''
       let assistantCreated = !!retryMessageId // 只有重试时才认为已创建（不需要创建新消息）
@@ -832,7 +838,7 @@ function ChatWindow() {
 
             if (!expectedAssistantId) return
             const expected = serverMessages.find((m: any) => m.id === expectedAssistantId)
-            if (expected && hasRoundPromptPayload(expected)) {
+            if (hasRoundPrompt(expected)) {
               return
             }
           } catch (error) {
@@ -843,7 +849,6 @@ function ChatWindow() {
         }
       }
       let firstTokenReceived = false // 标记是否接收到第一个token
-      let statusRefreshTriggered = false
       if (!retryMessageId) {
         waitingMessageId = `waiting-${Date.now()}`
         const waitingMessage = {
@@ -916,10 +921,6 @@ function ChatWindow() {
             updated[msgIdx] = msg
             return updated
           })
-          if (conversationId && !statusRefreshTriggered) {
-            statusRefreshTriggered = true
-            void refreshConversationPapers(conversationId)
-          }
           continue
         } else if (event === 'thinking') {
           if (data && typeof data === 'object' && 'content' in data) {
@@ -1770,7 +1771,9 @@ function ChatWindow() {
           </button>
         </div>
         <div className="h-[calc(100%-56px)] overflow-y-auto p-4">
-          {!selectedRoundPrompt || roundPromptDisplayMessages.length === 0 ? (
+          {selectedRoundPromptLoading ? (
+            <div className="text-sm text-gray-500">正在加载本轮提示词...</div>
+          ) : !selectedRoundPrompt || roundPromptDisplayMessages.length === 0 ? (
             <div className="text-sm text-gray-500">未找到本轮提示词数据。</div>
           ) : (
             <div className="space-y-3">

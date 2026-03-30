@@ -1,0 +1,30 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "2102:8000"
+    environment:
+      DEBUG: "False"
+      CORS_ORIGINS: "http://localhost:2102,http://127.0.0.1:2102"
+      DATABASE_URL: "sqlite+aiosqlite:////data/ai_tools.db"
+      CHAT_DATABASE_URL: "sqlite+aiosqlite:////data/chat_history.db"
+      PAPER_DATA_DIR: "/data/chat/papers"
+      NOTEBOOK_DATA_DIR: "/data/notebook/notes"
+      CUSTOM_TOOLS_DATA_DIR: "/data/custom_tools"
+      ARXIV_TRANSLATE_DATA_DIR: "/data/custom_tools/arxiv_translate"
+      UPLOAD_DIR: "/uploads"
+    env_file:
+      - path: ./backend/.env
+        required: false
+    volumes:
+      - ./backend/data:/data
+      - ./backend/uploads:/uploads
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

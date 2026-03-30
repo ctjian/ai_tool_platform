@@ -18,6 +18,7 @@ from app.schemas.conversation import (
     ConversationDetailResponse,
     ConversationListResponse,
     MessageResponse,
+    MessageRoundPromptResponse,
     ExportConversationResponse,
 )
 from app.schemas.chat import (
@@ -51,6 +52,7 @@ __all__ = [
     "ConversationDetailResponse",
     "ConversationListResponse",
     "MessageResponse",
+    "MessageRoundPromptResponse",
     "ExportConversationResponse",
     # Chat schemas
     "ChatRequest",

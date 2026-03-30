@@ -6,6 +6,7 @@ import {
   ChatRequest,
   ConversationPapersState,
   PaperSection,
+  RoundPromptTrace,
   NotebookNote,
   NotebookGenerateRequest,
   NotebookGenerateResponse,
@@ -78,6 +79,10 @@ export const apiClient = {
   },
   getConversation: (conversationId: string) =>
     api.get<Conversation>(`/conversations/${conversationId}`),
+  getMessageRoundPrompt: (conversationId: string, messageId: string) =>
+    api.get<{ message_id: string; has_round_prompt: boolean; round_prompt?: RoundPromptTrace | null }>(
+      `/conversations/${conversationId}/messages/${messageId}/round-prompt`
+    ),
   updateConversation: (
     conversationId: string,
     data: { title?: string; system_prompt?: string | null }

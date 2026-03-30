@@ -32,6 +32,7 @@ class MessageResponse(MessageBase):
     cost_meta: Optional[dict] = Field(None, description="计费信息")
     thinking: Optional[str] = Field(None, description="模型思考内容")
     extra: Optional[dict] = Field(None, description="消息扩展元数据")
+    has_round_prompt: bool = Field(default=False, description="是否存在本轮提示词快照")
     
     @field_validator("cost_meta", mode="before")
     @classmethod
@@ -116,6 +117,13 @@ class ConversationDetailResponse(ConversationResponse):
     model_config = ConfigDict(from_attributes=True)
 
     messages: list[MessageResponse] = Field(default_factory=list)
+
+
+class MessageRoundPromptResponse(BaseModel):
+    """消息提示词快照响应"""
+    message_id: str = Field(..., description="消息ID")
+    has_round_prompt: bool = Field(default=False, description="是否存在本轮提示词快照")
+    round_prompt: Optional[dict] = Field(None, description="本轮提示词快照")
 
 
 class ConversationListResponse(BaseModel):
